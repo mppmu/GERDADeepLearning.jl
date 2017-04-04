@@ -10,8 +10,10 @@ type DLEnv # immutable
   config::Dict
   _ext_event_libs::Dict{String,Dict{Symbol,EventLibrary}}
 
-  function DLEnv(dir)
-    f = open(joinpath(dir,"config.json"), "r")
+  DLEnv() = DLEnv("config")
+  DLEnv(name::AbstractString) = DLEnv(abspath(""), name)
+  function DLEnv(dir::AbstractString, name::AbstractString)
+    f = open(joinpath(dir,"$name.json"), "r")
     dicttxt = readstring(f)  # file information to string
     dict = JSON.parse(dicttxt)  # parse and transform data
     env = new(dir, dict, Dict())
@@ -23,6 +25,11 @@ end
 export get_properties
 function get_properties(env::DLEnv, name::AbstractString)
   return get(env.config, name, Dict())
+end
+
+export set_properties
+function set_properties(env::DLEnv, name::AbstractString, props::Dict)
+  env.config[name] = props
 end
 
 export resolvepath
@@ -140,7 +147,7 @@ function contains(env::DLEnv, lib_name::String)
   if haskey(env._ext_event_libs, lib_name) && !isempty(env._ext_event_libs[lib_name])
     return true
   end
-  return isfile(_cachefile(env, lib_name))
+  return env.config["cache"] && isfile(_cachefile(env, lib_name))
 end
 
 export containsall

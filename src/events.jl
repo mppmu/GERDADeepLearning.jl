@@ -8,12 +8,14 @@ import HDF5: name
 default_labels = [:aoeValues, :aoeClasses, :E]
 
 
+export EventLibrary
 type EventLibrary
   waveforms::Array{Float32, 2}
   labels::Dict{Symbol,Array{Float32,1}} # same length as waveforms
   prop::Dict{Symbol,Any}
 
-  EventLibrary(waveforms::Array{Float32, 2}) = new(waveforms, Dict(), Dict())
+  EventLibrary(waveforms::Matrix{Float64}) = EventLibrary(convert(Matrix{Float32}, waveforms))
+  EventLibrary(waveforms::Matrix{Float32}) = new(waveforms, Dict(), Dict())
 end
 
 export read_sets

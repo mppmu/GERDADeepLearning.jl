@@ -13,7 +13,6 @@ function _build_conv_autoencoder(properties, input_size)
   pool_type = properties["pool_type"]
   act_type = properties["activation"]
   conv_dropout = properties["conv_dropout"]
-
   fc_layers = properties["fc"]
   dropout = properties["dropout"]
 
@@ -23,7 +22,7 @@ function _build_conv_autoencoder(properties, input_size)
   Y = mx.Variable(:label)
 
   # Convolutional layers
-  X = mx.Reshape(data=X, shape=(1, input_size, 1, batch_size))
+  X = mx.Reshape(data=X, shape=(1, input_size, 1, -2)) # last argument is batch_size
   for i in 1:length(filter_counts)
     X = conv_layer("conv_$i", X, filter_counts[i], filter_lengths[i], act_type, pool_sizes[i], pool_type, conv_dropout)
   end
@@ -34,13 +33,30 @@ function _build_conv_autoencoder(properties, input_size)
     X = fc_layer("fc_$i", X, fc_layers[i], act_type, dropout)
   end
   X = fc_layer("latent", X, fc_layers[end], act_type, dropout)
+  return build_conv_decoder(X, Y, properties, input_size)
+end
+
+function build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties, input_size)
+  batch_size = properties["batch_size"]
+  filter_counts = properties["conv_filters"]
+  filter_lengths = properties["conv_lengths"]
+  assert(length(filter_counts) == length(filter_lengths))
+  pool_sizes = properties["pool_size"]
+  pool_type = properties["pool_type"]
+  act_type = properties["activation"]
+  conv_dropout = properties["conv_dropout"]
+  fc_layers = properties["fc"]
+  dropout = properties["dropout"]
+
+  last_conv_data_length = Int(input_size / prod(pool_sizes))
+
   for i in (length(fc_layers)-1):-1:1
-    X = fc_layer("fc_$i", X, fc_layers[i], act_type, dropout)
+    X = fc_layer("dec_fc_$i", X, fc_layers[i], act_type, dropout)
   end
   X = fc_layer("blow_up", X, filter_counts[end] * last_conv_data_length, act_type, conv_dropout)
 
   # Deconvolutions
-  X = mx.Reshape(data=X, shape=(1, last_conv_data_length, Int(filter_counts[end]), batch_size))
+  X = mx.Reshape(data=X, shape=(1, last_conv_data_length, Int(filter_counts[end]), -2))
   for i in length(filter_counts):-1:2
     X = deconv_layer("deconv_$i", X, filter_counts[i-1], filter_lengths[i], act_type, pool_sizes[i], conv_dropout)
   end
@@ -85,9 +101,7 @@ function encode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
   result = copy(events)
   result.waveforms = transformed
   setname!(result, name(result)*"_encoded")
-
   push_classifier!(result, "Autoencoder")
-
   return result
 end
 
@@ -100,4 +114,31 @@ function encode(env::DLEnv, sets::Dict{Symbol,EventLibrary}, n::NetworkInfo, lib
   push!(env, lib_name, result)
 
   return result
+end
+
+export decode
+function decode(env::DLEnv, compact::EventLibrary, n::NetworkInfo, pulse_size)
+  println("Decoding '$(name(compact))'...")
+
+  X = mx.Variable(:data)
+  Y = mx.Variable(:label) # not needed because no training
+  loss, X = build_conv_decoder(X, Y, n.config, pulse_size)
+  model = subnetwork(n.model, mx.FeedForward(loss, context=best_device()))
+
+  provider = mx.ArrayDataProvider(:data => compact.waveforms, batch_size=n["batch_size"])
+  transformed = mx.predict(model, provider)
+
+  result = copy(compact)
+  result.waveforms = transformed
+  setname!(result, name(result)*"_decoded")
+  push_classifier!(result, "Autoencoder")
+  return result
+end
+
+export mse
+function mse(n::NetworkInfo, events::EventLibrary)
+  provider = mx.ArrayDataProvider(:data => events.waveforms,
+      :label => events.waveforms, batch_size=n["batch_size"])
+  mse_result = eval(n.model, provider, mx.MSE())
+  return mse_result[1][2]
 end

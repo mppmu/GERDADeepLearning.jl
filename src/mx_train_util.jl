@@ -71,25 +71,40 @@ function calculate_parameters(model, filepath)
  end
 
 
-export has_gpu
- function has_gpu()
-   try
-     mx.ones(Float32, (1,1), mx.gpu())
-     return true
-   catch err
-     return false
-   end
+function exists_device(ctx::mx.Context)
+ try
+   mx.ones(Float32, (1,1), ctx)
+   return true
+ catch err
+   return false
  end
+end
 
  best_device_cache = nothing
 
  function best_device()
    global best_device_cache
    if best_device_cache == nothing
-     best_device_cache = has_gpu() ? mx.gpu() : mx.cpu()
+     gpus = list_xpus(mx.gpu)
+     if length(gpus) > 0
+       best_device_cache = gpus
+       info("$(length(gpus)) GPUs found.")
+     else
+       best_device_cache = mx.cpu()
+       info("No GPUs available, fallback to single CPU.")
+     end
    end
    return best_device_cache
  end
+
+export list_xpus
+function list_xpus(xpu=mx.gpu)
+  result = mx.Context[]
+  while exists_device(xpu(length(result))) && length(result) < 8
+    push!(result, xpu(length(result)))
+  end
+  return result
+end
 
 
 
@@ -125,6 +140,7 @@ function train(n::NetworkInfo,
   mx.fit(n.model, optimizer, train_provider,
          n_epoch=epochs-n.epoch,
          eval_metric=metric,
+         kvstore=:device,
          callbacks=[plot_cb, mx.do_checkpoint(joinpath(n.dir,n.name))])
 
   # TODO eval not implemented
@@ -180,6 +196,19 @@ function slim_array(array, slim)
 end
 
 
+function eval(model, provider::mx.ArrayDataProvider, metric::mx.AbstractEvalMetric)
+  prediction = mx.predict(model, provider)
+  data = provider.data_arrays[1]
+  mx.reset!(metric)
+
+  data_nd = mx.NDArray(data)
+  prediction_nd = mx.NDArray(prediction)
+
+  mx.update!(metric, [data_nd], [prediction_nd])
+  return mx.get(metric)
+end
+
+
 
  function load_network(n::NetworkInfo, epoch; output_name="softmax", delete_unneeded_arguments=true)
    if epoch < 0
@@ -210,6 +239,20 @@ end
    end
 
    return model
+ end
+
+ function subnetwork(network::mx.FeedForward, subnetwork::mx.FeedForward)
+   subnetwork.arg_params = copy(network.arg_params)
+   subnetwork.aux_params = copy(network.aux_params)
+
+   needed_args = mx.list_arguments(subnetwork.arch)
+   for (name, array) in subnetwork.arg_params
+     if !(name in needed_args)
+       delete!(subnetwork.arg_params, name)
+     end
+   end
+
+   return subnetwork
  end
 
  function last_epoch(dir, prefix; start=1)

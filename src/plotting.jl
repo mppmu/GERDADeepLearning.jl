@@ -11,7 +11,7 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=
     data = data[1:count]
   end
 
-  dir = joinpath(env.dir, "plots", "autoencoder")
+  dir = joinpath(env.dir, "plots", n.name)
   isdir(dir) || mkdir(dir)
 
   println("Generating plots in $dir...")
@@ -80,9 +80,11 @@ function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString; bin_w
 end
 
 function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
-  filepath = joinpath(env.dir, "plots", "waveforms-$(events[:name]).png")
+  count = min(count, length(events))
+  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
   println("Plotting waveforms to $filepath")
-  plot_waveforms(events.waveforms[:,1:count], filepath)
+  plot_waveforms(events.waveforms[:,1:count], filepath;
+      bin_width_ns=bin_width_ns, cut=cut)
 end
 
 
