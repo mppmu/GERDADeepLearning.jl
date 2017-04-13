@@ -98,22 +98,48 @@ This step will only be executed and cached if no cache from a previous run exist
 
 ## Machine learning algorithms
 Currently the framework supports convolutional autoencoders and DNN classifiers.
+Every neural network has a unique ID within the environment which is used to store progress and facilitate coding.
 
 ```julia
-#  Train and evaluate an autoencoder
-lat = get(env, "latent") do
-  ae = autoencoder(env, pre[:train], pre[:xval])
-  plot_autoencoder(env, ae, pre[:xval])
-  return encode(env, pre, ae)
-end
+ae = autoencoder(env, pre[:train], pre[:xval]; action=:auto)
+lat = encode(env, pre, ae)
 
-# Train and evaluate a DNN
 dnn_classifier(env, lat; id="latent-dnn-classifier", evaluate=[:train, :test])
-
 ```
+The methods `autoencoder` and `dnn_classifier`
 
 ```json
+"autoencoder":
+{
+	"slim": 0,
 
+	"conv_filters": [4, 8],
+	"conv_lengths": [9, 9],
+	"pool_size": [4, 4],
+	"pool_type": "max",
+	"conv_dropout": 0.0,
+
+	"fc": [10],
+	"dropout": 0.0,
+	"activation": "relu",
+
+	"learning_rate": 0.001,
+	"batch_size": 100,
+	"epochs": 30
+},
+
+"latent-dnn-classifier":
+{
+	"slim": 0,
+
+	"fc": [20, 10],
+	"dropout": 0.5,
+	"activation": "relu",
+
+	"learning_rate": 0.001,
+	"batch_size": 100,
+	"epochs": 1000
+},
 ```
 
 ## Plotting
