@@ -86,13 +86,13 @@ end
 
 function autoencoder(env::DLEnv, training_data::EventLibrary, eval_data::EventLibrary, id="autoencoder")
   action = decide_best_action(network(env,id))
-  println("Autoencoder: auto-selected action is $action")
+  println("$id: auto-selected action is $action")
   return autoencoder(action, env, training_data, eval_data, id)
 end
 
 export encode
 function encode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
-  println("Encoding '$(name(events))'...")
+  println("$(n.name): encoding '$(name(events))'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true)
   provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=n["batch_size"])
@@ -118,14 +118,19 @@ end
 
 export decode
 function decode(env::DLEnv, compact::EventLibrary, n::NetworkInfo, pulse_size)
-  println("Decoding '$(name(compact))'...")
+  println("$(n.name): decoding '$(name(compact))'...")
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training
   loss, X = build_conv_decoder(X, Y, n.config, pulse_size)
   model = subnetwork(n.model, mx.FeedForward(loss, context=best_device()))
 
-  provider = mx.ArrayDataProvider(:data => compact.waveforms, batch_size=n["batch_size"])
+  batch_size=n["batch_size"]
+  if length(compact) < batch_size
+      compact.waveforms = hcat(compact.waveforms, fill(0, size(compact.waveforms, 1), batch_size-size(compact.waveforms, 2)))
+  end
+
+  provider = mx.ArrayDataProvider(:data => compact.waveforms, batch_size=batch_size)
   transformed = mx.predict(model, provider)
 
   result = copy(compact)

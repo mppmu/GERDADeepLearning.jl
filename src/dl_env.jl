@@ -27,9 +27,17 @@ function get_properties(env::DLEnv, name::AbstractString)
   return get(env.config, name, Dict())
 end
 
-export set_properties
-function set_properties(env::DLEnv, name::AbstractString, props::Dict)
+export set_properties!
+function set_properties!(env::DLEnv, name::AbstractString, props::Dict)
   env.config[name] = props
+end
+
+export new_properties!
+function new_properties!(modifier, env::DLEnv, template_name::AbstractString, new_name::AbstractString)
+  d = copy(get_properties(env, template_name))
+  d = modifier(d)
+  set_properties!(env, new_name, d)
+  return d
 end
 
 export resolvepath
@@ -52,7 +60,7 @@ If caching is active (set in config.json), the cached data will be read if avail
 Otherwise a new cache file will be created.
 If overwrite_existing is set to true, the original data is read and optionally cached.
 """
-function getdata(env::DLEnv; targets::Array{String}=[])
+function getdata(env::DLEnv; targets::Array{String}=String[])
   data = get(env, "data"; targets=targets) do
     # Else read original data
     println("Reading original data from $(env.config["path"])")
@@ -99,7 +107,7 @@ function e_mkdir(dir)
 end
 
 export get
-function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=[])
+function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[])
   if !isempty(targets) && containsall(env, targets)
     println("Skipping retrieval of '$lib_name'.")
     return nothing

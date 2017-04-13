@@ -11,7 +11,7 @@ default_labels = [:aoeValues, :aoeClasses, :E]
 export EventLibrary
 type EventLibrary
   waveforms::Array{Float32, 2}
-  labels::Dict{Symbol,Array{Float32,1}} # same length as waveforms
+  labels::Dict{Symbol,Vector{Float32}} # same length as waveforms
   prop::Dict{Symbol,Any}
 
   EventLibrary(waveforms::Matrix{Float64}) = EventLibrary(convert(Matrix{Float32}, waveforms))
@@ -112,6 +112,14 @@ function filter(events::EventLibrary, predicate_key=:E, predicate=e->((e>600) &&
   list = events.labels[predicate_key]
   indices = find(predicate, list)
   return events[indices]
+end
+
+function filter(sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
+  result = Dict{Symbol,EventLibrary}()
+  for (key, lib) in sets
+    result[key] = filter(lib, predicate_key, predicate)
+  end
+  return result
 end
 
 export getindex
@@ -249,4 +257,10 @@ function equalize_counts_by_label(events::EventLibrary, label_key=:SSE)
   shuffled_indices = used_indices[randperm(length(used_indices))]
 
   return events[shuffled_indices], shuffled_indices
+end
+
+
+export put_label!
+function put_label!(events::EventLibrary, label_name::Symbol, data::Vector{Float32})
+  events.labels[label_name] = data
 end

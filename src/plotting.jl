@@ -64,7 +64,8 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
 end
 
 export plot_waveforms
-function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString; bin_width_ns=10, cut=nothing, diagram_font=font(16))
+function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
+      bin_width_ns=10, cut=nothing, diagram_font=font(16))
   if cut != nothing
     data = data[cut,:]
   end
@@ -85,6 +86,24 @@ function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=
   println("Plotting waveforms to $filepath")
   plot_waveforms(events.waveforms[:,1:count], filepath;
       bin_width_ns=bin_width_ns, cut=cut)
+end
+
+export plot_waveform_thumbnail
+function plot_waveform_thumbnail(env::DLEnv, waveform::Vector{Float32}; bin_width_ns=10, tcut=50:200, titlestring=nothing, diagram_size=(140, 100), diagram_font=font(12), filename="waveform-thumbnail.png")
+  waveform = waveform[tcut]
+  tlength = tcut[end] - tcut[1]
+  time = linspace(0, (tlength-1)*0.01, length(waveform))
+
+  fig = plot(time, waveform, size=diagram_size, line=(:blue), legend=:none, xformatter = x -> "$(Int(x)) us", grid=false)
+  yticks!(Float64[])
+  xticks!([0,1])
+  xaxis!(diagram_font)
+  yaxis!((minimum(waveform), maximum(waveform)*1.1))
+  if titlestring != nothing
+    title!(titlestring, titlefont=diagram_font)
+  end
+  savefig(joinpath(env.dir, "plots", filename))
+  fig
 end
 
 
