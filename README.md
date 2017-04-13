@@ -106,7 +106,9 @@ lat = encode(env, pre, ae)
 
 dnn_classifier(env, lat; id="latent-dnn-classifier", evaluate=[:train, :test])
 ```
-The methods `autoencoder` and `dnn_classifier`
+The methods `autoencoder` and `dnn_classifier` return a network handle which can be used for further processing. If the action is set to `:auto` (default), the library will load a trained network if available, refine a pretrained network or train a new network from scratch and save the result.
+
+The network layout is read from the environment configuration. For each network there should be a JSON entry containing the necessary parameters.
 
 ```json
 "autoencoder":
@@ -139,12 +141,16 @@ The methods `autoencoder` and `dnn_classifier`
 	"learning_rate": 0.001,
 	"batch_size": 100,
 	"epochs": 1000
-},
+}
 ```
 
 ## Plotting
+GERDADeepLearning provides several plotting functions both for plotting waveforms and visualizing networks.
 
 ```julia
+# Plots reconstructions from the validation set and network visualization
 plot_autoencoder(env, ae, pre[:xval])
+
+# Evaluates classifier efficiencies on the given datasets and plots results
 plot_classifier(env, "comparison", lat[:test], lat[:train], pre[:test], pre[:train])
 ```
