@@ -112,10 +112,6 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
     println("Skipping retrieval of '$lib_name'.")
     return nothing
   end
-  return get(compute, env, lib_name)
-end
-
-function get(compute, env::DLEnv, lib_name::String)
   if contains(env, lib_name)
     println("Retrieving '$lib_name' from cache.")
     return get(env, lib_name)

@@ -170,8 +170,11 @@ function copy(events::EventLibrary)
 end
 
 
-export string
-function string(events::EventLibrary)
+function Base.string(events::EventLibrary)
+  return "$(name(events)) ($(length(events)) events)"
+end
+
+function Base.summary(events::EventLibrary)
   return "$(name(events)) ($(length(events)) events)"
 end
 
@@ -185,15 +188,13 @@ function setname!(events::EventLibrary, name::String)
   events.prop[:name] = name
 end
 
-export println
-function println(events::EventLibrary)
-  println(string(events))
-end
-
-export print
-function print(events::EventLibrary)
-  print(string(events))
-end
+# export convert
+# function convert(target::Type{String}, events::EventLibrary)
+#   if target == String
+#     return string(events)
+#   end
+#   throw(MethodError(convert, target, events))
+# end
 
 export get_classifiers
 function get_classifiers(events::EventLibrary)
@@ -216,9 +217,9 @@ end
 
 
 
-function cat_events()
-
-end
+# function cat_events()
+#
+# end
 
 export label_energy_peaks
 function label_energy_peaks(events::EventLibrary, label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)

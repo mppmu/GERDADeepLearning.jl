@@ -4,8 +4,8 @@ using MXNet, Plots
 
 
 export plot_autoencoder
-function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=20)
-  batch_size = get_properties(env, "autoencoder")["batch_size"]
+function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=20, transform=identity)
+  batch_size = n["batch_size"]
 
   if length(data) > count
     data = data[1:count]
@@ -18,23 +18,16 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=
 
   model = n.model
 
-  visualize_1D_convolution(model, :conv1_weight, joinpath(dir,"filters1.png"))
-  visualize_2D_convolution(model, :conv2_weight, joinpath(dir,"filter2"))
+  visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
+  visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
 
-  if length(data) < batch_size
-    plot_waveforms_padded = zeros(size(data.waveforms,1), batch_size)
-    plot_waveforms_padded[:,1:length(data)] = data.waveforms
-  else
-    plot_waveforms_padded = data.waveforms
-  end
-  # plot_waveforms_padded = transform(plot_waveforms_padded)
-  provider = provider = mx.ArrayDataProvider(:data => plot_waveforms_padded, batch_size=batch_size)
-  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=data[:name]*"-", sample_count=length(data))
+  provider = padded_array_provider(:data, data.waveforms, batch_size)
+  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=data[:name]*"-", sample_count=length(data), transform=transform)
 
-  loss = model.arch
-  open(joinpath(dir,"graphviz.dot"), "w") do file
-    println(file, mx.to_graphviz(loss))
-  end
+  # loss = model.arch
+  # open(joinpath(dir,"graphviz.dot"), "w") do file
+  #   println(file, mx.to_graphviz(loss))
+  # end
 
   println("Saved plots to $dir")
 
@@ -110,11 +103,12 @@ end
 function visualize_1D_convolution(model, name, filename)
   for param in model.arg_params
     if(param[1] == name)
-      filters = copy(param[2])[1,:,1,:]
-      plot(filters)
+      filters = copy(param[2])[1,:,1,:] # One column per filter
+      filters = vcat(filters, transpose(filters[end,:]))
+      plot(filters, line=(2, :steppost))
       title!("Learned convolutional filters in first layer")
       xaxis!("Delta time")
-      yaxis!("Filter value (current waveform)")
+      yaxis!("Conv. filter value")
       savefig(filename)
     end
   end

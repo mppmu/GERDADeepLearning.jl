@@ -1,6 +1,6 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-__precompile__(false)
+# __precompile__(false)
 
 module GERDADeepLearning
 

@@ -101,10 +101,12 @@ Currently the framework supports convolutional autoencoders and DNN classifiers.
 Every neural network has a unique ID within the environment which is used to store progress and facilitate coding.
 
 ```julia
-ae = autoencoder(env, pre[:train], pre[:xval]; action=:auto)
-lat = encode(env, pre, ae)
+# data::Dict{Symbol, EventLibrary}
 
-dnn_classifier(env, lat; id="latent-dnn-classifier", evaluate=[:train, :test])
+ae = autoencoder(env, data; id="autoencoder", action=:auto, train_key=:train, xval_key=:xval)
+compact = encode(env, pre, ae)
+
+dnn = dnn_classifier(env, data; id="latent-dnn-classifier", action=:auto, label_key=:SSE, train_key=:train, xval_key=:xval, evaluate=[:train, :test])
 ```
 The methods `autoencoder` and `dnn_classifier` return a network handle which can be used for further processing. If the action is set to `:auto` (default), the library will load a trained network if available, refine a pretrained network or train a new network from scratch and save the result.
 

@@ -6,16 +6,16 @@ import Base: getindex
 
 
 function fc_layer(name, X, n_hidden, act_type, pdropout)
-  fc = mx.FullyConnected(data=X, num_hidden=Int(n_hidden), name="$(name)")
-  act = mx.Activation(data=fc, act_type=act_type, name="$(name)_act")
-  return mx.Dropout(data=act, p=pdropout, name="$(name)_dropout")
+  fc = mx.FullyConnected(X, num_hidden=Int(n_hidden), name="$(name)")
+  act = mx.Activation(fc, act_type=act_type, name="$(name)_act")
+  return mx.Dropout(act, p=pdropout, name="$(name)_dropout")
 end
 
 function conv_layer(name, X, num_filter, filter_length, act_type, pool_size, pool_type, dropout)
-  conv = mx.Convolution(data=X, kernel=(1, filter_length), pad=(0, 4), num_filter=num_filter, name="$name") # 2D->3D
-  act = mx.Activation(data=conv, act_type=act_type, name="$(name)_act")
-  pool = mx.Pooling(data=act, kernel=(1, pool_size), stride=(1, pool_size), pool_type=pool_type, name="$(name)_pool") # 256->64
-  dropout = mx.Dropout(data=pool, p=dropout, name="$(name)_dropout")
+  conv = mx.Convolution(X, kernel=(1, filter_length), pad=(0, 4), num_filter=num_filter, name="$name") # 2D->3D
+  act = mx.Activation(conv, act_type=act_type, name="$(name)_act")
+  pool = mx.Pooling(act, kernel=(1, pool_size), stride=(1, pool_size), pool_type=pool_type, name="$(name)_pool") # 256->64
+  dropout = mx.Dropout(pool, p=dropout, name="$(name)_dropout")
   return dropout
 end
 
@@ -24,11 +24,11 @@ function deconv_layer(name, X, num_filter, filter_length, act_type, pool_size, d
   if pad < 0
     throw(ArgumentError("upsampling not possible because padding is negative ($pad). Increase filter length or decrease pool size."))
   end
-  X = mx.Deconvolution(data=X, kernel=(1, filter_length-1), stride=(1, pool_size), pad=(0, pad), num_filter=num_filter, name="$name")
+  X = mx.Deconvolution(X, kernel=(1, filter_length-1), stride=(1, pool_size), pad=(0, pad), num_filter=num_filter, name="$name")
   if act_type != nothing
-    X = mx.Activation(data=X, act_type=act_type, name="$(name)_act")
+    X = mx.Activation(X, act_type=act_type, name="$(name)_act")
   end
-  X = mx.Dropout(data=X, p=dropout, name="$(name)_dropout")
+  X = mx.Dropout(X, p=dropout, name="$(name)_dropout")
   return X
 end
 
@@ -96,6 +96,17 @@ end
    end
    return best_device_cache
  end
+
+export use_gpu
+function use_gpu(id)
+  global best_device_cache
+  if exists_device(mx.gpu(id))
+    best_device_cache = mx.gpu(id)
+  else
+    info("Could not access GPU $id, fallback to CPU")
+    best_device_cache = mx.cpu()
+  end
+end
 
 export list_xpus
 function list_xpus(xpu=mx.gpu)
@@ -193,6 +204,17 @@ function slim_array(array, slim)
   else
     return array[:,1:slim]
   end
+end
+
+
+function padded_array_provider(key, data::Matrix{Float32}, batch_size)
+  if size(data, 2) < batch_size
+    plot_waveforms_padded = zeros(size(data,1), batch_size)
+    plot_waveforms_padded[:,1:size(data, 2)] = data
+  else
+    plot_waveforms_padded = data
+  end
+  return mx.ArrayDataProvider(key => plot_waveforms_padded, batch_size=batch_size)
 end
 
 

@@ -22,7 +22,7 @@ function _build_conv_autoencoder(properties, input_size)
   Y = mx.Variable(:label)
 
   # Convolutional layers
-  X = mx.Reshape(data=X, shape=(1, input_size, 1, -2)) # last argument is batch_size
+  X = mx.Reshape(X, shape=(1, input_size, 1, 0), name=:reshape_for_conv) # last argument is batch_size
   for i in 1:length(filter_counts)
     X = conv_layer("conv_$i", X, filter_counts[i], filter_lengths[i], act_type, pool_sizes[i], pool_type, conv_dropout)
   end
@@ -56,22 +56,27 @@ function build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties, 
   X = fc_layer("blow_up", X, filter_counts[end] * last_conv_data_length, act_type, conv_dropout)
 
   # Deconvolutions
-  X = mx.Reshape(data=X, shape=(1, last_conv_data_length, Int(filter_counts[end]), -2))
+  X = mx.Reshape(X, shape=(1, last_conv_data_length, Int(filter_counts[end]), 0), name=:reshape_for_deconv)
   for i in length(filter_counts):-1:2
     X = deconv_layer("deconv_$i", X, filter_counts[i-1], filter_lengths[i], act_type, pool_sizes[i], conv_dropout)
   end
   X = deconv_layer("deconv_1", X, 1, filter_lengths[1], nothing, pool_sizes[1], 0)
   # output should have shape (features, batch_size)
   X = mx.Flatten(X, name=:out) # (batch_size, width, height=1)
-    # X = mx.FullyConnected(data=X, num_hidden=input_size, name=:out)
-  loss = mx.LinearRegressionOutput(data=X, label=Y, name=:softmax)
+    # X = mx.FullyConnected(X, num_hidden=input_size, name=:out)
+  loss = mx.LinearRegressionOutput(X, Y, name=:softmax)
   return loss, X
 end
 
 
 export autoencoder
-function autoencoder(build_type::Symbol, env::DLEnv,
-    training_data::EventLibrary, eval_data::EventLibrary, id="autoencoder")
+function autoencoder(env::DLEnv,
+    training_data::EventLibrary, eval_data::EventLibrary; id="autoencoder", action::Symbol=:auto)
+
+  if action == :auto
+    action = decide_best_action(network(env,id))
+    println("$id: auto-selected action is $action")
+  end
 
   n = network(env, id)
 
@@ -80,15 +85,16 @@ function autoencoder(build_type::Symbol, env::DLEnv,
   eval_provider = mx.ArrayDataProvider(:data => eval_data.waveforms,
       :label => eval_data.waveforms, batch_size=n["batch_size"])
 
-  build(n, build_type, train_provider, eval_provider, _build_conv_autoencoder)
+  build(n, action, train_provider, eval_provider, _build_conv_autoencoder)
   return n
 end
 
-function autoencoder(env::DLEnv, training_data::EventLibrary, eval_data::EventLibrary, id="autoencoder")
-  action = decide_best_action(network(env,id))
-  println("$id: auto-selected action is $action")
-  return autoencoder(action, env, training_data, eval_data, id)
+function autoencoder(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
+  id="autoencoder", action::Symbol=:auto,
+  train_key=:train, xval_key=:xval)
+  return autoencoder(env, data_sets[train_key], data_sets[xval_key]; id=id, action=action)
 end
+
 
 export encode
 function encode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
@@ -146,4 +152,17 @@ function mse(n::NetworkInfo, events::EventLibrary)
       :label => events.waveforms, batch_size=n["batch_size"])
   mse_result = eval(n.model, provider, mx.MSE())
   return mse_result[1][2]
+end
+
+
+function encode_decode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
+  batch_size=n["batch_size"]
+  provider = padded_array_provider(:data, events.waveforms, batch_size)
+  reconst = mx.predict(n.model, provider)
+
+  result = copy(events)
+  result.waveforms = reconst
+  setname!(result, "$(name(result))_reconst")
+  push_classifier!(result, "Autoencoder")
+  return result
 end

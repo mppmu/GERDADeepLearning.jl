@@ -27,7 +27,7 @@ end
 
 
 export dnn_classifier
-function dnn_classifier(env::DLEnv, data_sets;
+function dnn_classifier(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
   id="dnn-classifier", action::Symbol=:auto, label_key=:SSE,
   train_key=:train, xval_key=:xval, evaluate=[:test])
   if action == :auto
