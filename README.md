@@ -59,11 +59,14 @@ put_label!(events, :MyAttribute, randn(Float32, N))
 name(events) # retrieves the name as a String
 setname!(events, "myevents")
 
+string(events) # also used in "$events" returns the name and event count
+
 N = length(events) # get the number of events
 
 selection = events[1:100] # get first 100 events
 selection = filter(events, :MyAttribute, x -> x > 0) # filter events by label
-events2 = copy(events) # create a shallow copy (references same waveforms)
+events2 = copy(events) # create a shallow copy (references same waveforms and label arrays)
+events3 = deepcopy(events) # copies waveforms and labels
 
 # IO functions are usually handled internally by DLEnv.
 
@@ -90,28 +93,69 @@ Each processing step is passed to the environment through the `get` method. Addi
 ```julia
 preprocessed = get(env, "preprocessed"; targets=["latent", "dnn"]) do
   p=preprocess(env, sets)
-  plot_waveforms(env, p[:test])
-  return p
+  plot_waveforms(env, p) # returns p
 end
 ```
 This step will only be executed and cached if no cache from a previous run exists. This feature can be disabled with the `cache` property in the configuration file.
 
 ## Machine learning algorithms
 Currently the framework supports convolutional autoencoders and DNN classifiers.
-Every neural network has a unique ID within the environment which is used to store progress and facilitate coding.
+Every instance of neural network has a unique ID of type `String`. The network layout and learning parameters are stored within the JSON configuration file in a subset with the corresponding ID.
+
+For two networks with IDs `autoencoder` and `dnn-classifier` the configuration file would have the following structure.
+```json
+{
+"path": "/remote/ceph/group/gerda/data/psa-skim/pholl/ch09",
+"keylists": ["run0063-cal-allFiles.txt", "run0062-cal-allFiles.txt"],
+
+"autoencoder":
+{   },
+"dnn-classifier":
+{   }
+}
+```
+
+Custom configurations can also be generated at runtime from existing templates.
+```julia
+# Create a modified autoencoder specification with a different batch size
+new_properties!(env, "autoencoder", "autoencoder2") do p
+	p["batch_size"] = 200
+end
+```
+
+Networks can be obtained through the `autoencoder` and `dnn_classifier` methods which return a network handle. How this network is obtained depends on the `action` parameter.
+Supported actions are:
+- `:train` to train a new network from scratch (replaces existing network with same ID) and save it in the environment.
+- `:load` to load a previously trained network.
+- `:refine` to load a previously trained network and continue training until the specified number of epochs is reached.
+- `:auto` (default) to let the library decide what action to take based upon previously saved data.
+
+### Autoencoder
+Use a convolutional autoencoder to move back and forth between original representation and compact representation (latent space).
 
 ```julia
 # data::Dict{Symbol, EventLibrary}
+# dataset::EventLibrary
 
-ae = autoencoder(env, data; id="autoencoder", action=:auto, train_key=:train, xval_key=:xval)
-compact = encode(env, pre, ae)
+# Obtain an autoencoder (load or train)
+net = autoencoder(env, data; id="autoencoder", action=:auto, train_key=:train, xval_key=:xval)
 
-dnn = dnn_classifier(env, data; id="latent-dnn-classifier", action=:auto, label_key=:SSE, train_key=:train, xval_key=:xval, evaluate=[:train, :test])
+compact = encode(data, net)
+compact = encode(dataset, net)
+
+reconst = decode(dataset, net, target_size)
+
+reconst = encode_decode(dataset, net)
+
+error = mse(net, dataset) # Returns the mean squared error averaged over all events
+
+# Train a custom decoder
+dec = decoder(env, latent_data, target_data; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
+encode_decode(latent_dataset, dec)
 ```
-The methods `autoencoder` and `dnn_classifier` return a network handle which can be used for further processing. If the action is set to `:auto` (default), the library will load a trained network if available, refine a pretrained network or train a new network from scratch and save the result.
 
-The network layout is read from the environment configuration. For each network there should be a JSON entry containing the necessary parameters.
 
+Supported parameters in configuration file:
 ```json
 "autoencoder":
 {
@@ -130,9 +174,23 @@ The network layout is read from the environment configuration. For each network 
 	"learning_rate": 0.001,
 	"batch_size": 100,
 	"epochs": 30
-},
+}
+```
 
-"latent-dnn-classifier":
+
+### DNN classifier
+Use a neural network with fully connected layers to classify a dataset.
+
+```julia
+# Using a DNN for classification
+dnn = dnn_classifier(env, data; id="latent-dnn-classifier", action=:auto, label_key=:SSE, train_key=:train, xval_key=:xval, evaluate=[:train, :test])
+
+predict(dataset, net; psd_name=:psd) # Adds a label to the EventLibrary
+```
+
+Supported parameters in configuration file:
+```json
+"dnn-classifier":
 {
 	"slim": 0,
 
@@ -150,9 +208,16 @@ The network layout is read from the environment configuration. For each network 
 GERDADeepLearning provides several plotting functions both for plotting waveforms and visualizing networks.
 
 ```julia
+# Plot a number of waveforms in one diagram
+plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
+plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
+      bin_width_ns=10, cut=nothing, diagram_font=font(16))
+
 # Plots reconstructions from the validation set and network visualization
-plot_autoencoder(env, ae, pre[:xval])
+plot_autoencoder(env::DLEnv, n::NetworkInfo) # only network
+plot_autoencoder(env::DLEnv, n::NetworkInfo, data::Dict{Symbol,EventLibrary}; count=20, transform=identity) # network and reconstruction
 
 # Evaluates classifier efficiencies on the given datasets and plots results
-plot_classifier(env, "comparison", lat[:test], lat[:train], pre[:test], pre[:train])
+plot_classifier(env::DLEnv, name, libs::EventLibrary...;
+    classifier_key=:psd, label_key=:SSE, plot_AoE=false)
 ```

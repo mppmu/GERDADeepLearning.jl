@@ -33,10 +33,16 @@ function _build_conv_autoencoder(properties, input_size)
     X = fc_layer("fc_$i", X, fc_layers[i], act_type, dropout)
   end
   X = fc_layer("latent", X, fc_layers[end], act_type, dropout)
-  return build_conv_decoder(X, Y, properties, input_size)
+  return _build_conv_decoder(X, Y, properties, input_size)
 end
 
-function build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties, input_size)
+function _build_conv_decoder(full_size, properties, input_size)
+  X = mx.Variable(:data)
+  Y = mx.Variable(:label)
+  return _build_conv_decoder(X, Y, properties, full_size)
+end
+
+function _build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties, full_size)
   batch_size = properties["batch_size"]
   filter_counts = properties["conv_filters"]
   filter_lengths = properties["conv_lengths"]
@@ -48,7 +54,7 @@ function build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties, 
   fc_layers = properties["fc"]
   dropout = properties["dropout"]
 
-  last_conv_data_length = Int(input_size / prod(pool_sizes))
+  last_conv_data_length = Int(full_size / prod(pool_sizes))
 
   for i in (length(fc_layers)-1):-1:1
     X = fc_layer("dec_fc_$i", X, fc_layers[i], act_type, dropout)
@@ -96,8 +102,30 @@ function autoencoder(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
 end
 
 
+export decoder
+function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
+  target_datasets::Dict{Symbol, EventLibrary}; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
+
+  if action == :auto
+    action = decide_best_action(network(env,id))
+    println("$id: auto-selected action is $action")
+  end
+
+  n = network(env, id)
+
+  train_provider = mx.ArrayDataProvider(:data => latent_datasets[train_key].waveforms,
+      :label => target_datasets[train_key].waveforms, batch_size=n["batch_size"])
+  eval_provider = mx.ArrayDataProvider(:data => latent_datasets[xval_key].waveforms,
+      :label => target_datasets[xval_key].waveforms, batch_size=n["batch_size"])
+
+  full_size = size(target_datasets[train_key].waveforms, 1)
+  build(n, action, train_provider, eval_provider, (p, s) -> _build_conv_decoder(full_size, p, s))
+  return n
+end
+
+
 export encode
-function encode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
+function encode(events::EventLibrary, n::NetworkInfo)
   println("$(n.name): encoding '$(name(events))'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true)
@@ -111,24 +139,21 @@ function encode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
   return result
 end
 
-function encode(env::DLEnv, sets::Dict{Symbol,EventLibrary}, n::NetworkInfo, lib_name="latent")
+function encode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo)
   result = Dict{Symbol, EventLibrary}()
   for (key, value) in sets
-    result[key] = encode(env, value, n)
+    result[key] = encode(value, n)
   end
-
-  push!(env, lib_name, result)
-
   return result
 end
 
 export decode
-function decode(env::DLEnv, compact::EventLibrary, n::NetworkInfo, pulse_size)
+function decode(compact::EventLibrary, n::NetworkInfo, pulse_size)
   println("$(n.name): decoding '$(name(compact))'...")
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training
-  loss, X = build_conv_decoder(X, Y, n.config, pulse_size)
+  loss, X = _build_conv_decoder(X, Y, n.config, pulse_size)
   model = subnetwork(n.model, mx.FeedForward(loss, context=best_device()))
 
   batch_size=n["batch_size"]
@@ -155,7 +180,8 @@ function mse(n::NetworkInfo, events::EventLibrary)
 end
 
 
-function encode_decode(env::DLEnv, events::EventLibrary, n::NetworkInfo)
+export encode_decode
+function encode_decode(events::EventLibrary, n::NetworkInfo)
   batch_size=n["batch_size"]
   provider = padded_array_provider(:data, events.waveforms, batch_size)
   reconst = mx.predict(n.model, provider)

@@ -79,7 +79,7 @@ function getdata(env::DLEnv; targets::Array{String}=String[])
     return sets
   end
   if data != nothing
-    for (n, set) in data println(set) end
+    for (n, set) in data println(summary(set)) end
   end
   return data
 end

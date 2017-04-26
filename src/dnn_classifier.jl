@@ -63,7 +63,7 @@ function dnn_classifier(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
 end
 
 export predict
-function predict(env::DLEnv, data::EventLibrary, n::NetworkInfo; psd_name=:psd)
+function predict(data::EventLibrary, n::NetworkInfo; psd_name=:psd)
   provider = mx.ArrayDataProvider(:data => data.waveforms, batch_size=n["batch_size"])
   predictions = mx.predict(n.model, provider)
   data.labels[psd_name] = predictions[1,:]

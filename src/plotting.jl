@@ -4,32 +4,43 @@ using MXNet, Plots
 
 
 export plot_autoencoder
-function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=20, transform=identity)
-  batch_size = n["batch_size"]
-
-  if length(data) > count
-    data = data[1:count]
-  end
-
+function plot_autoencoder(env::DLEnv, n::NetworkInfo)
   dir = joinpath(env.dir, "plots", n.name)
   isdir(dir) || mkdir(dir)
-
   println("Generating plots in $dir...")
 
   model = n.model
 
   visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
   visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
+  println("Saved network plots to $dir")
+  return model, dir
+end
+
+function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::Dict{Symbol,EventLibrary}; count=20, transform=identity)
+  for (key,value) in data
+    plot_autoencoder(env, n, value; count=count, transform=transform)
+  end
+end
+
+function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=20, transform=identity)
+  batch_size = n["batch_size"]
+
+  model, dir = plot_autoencoder(env, n)
+
+  if length(data) > count
+    data = data[1:count]
+  end
 
   provider = padded_array_provider(:data, data.waveforms, batch_size)
-  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=data[:name]*"-", sample_count=length(data), transform=transform)
+  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=length(data), transform=transform)
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
   #   println(file, mx.to_graphviz(loss))
   # end
 
-  println("Saved plots to $dir")
+  println("Saved reconstruction plots to $dir")
 
   return model, dir
 end
@@ -71,6 +82,7 @@ function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
   xaxis!("Time (ns)", diagram_font)
   yaxis!("Current pulse", diagram_font)
   savefig(filepath)
+  return data
 end
 
 function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
@@ -79,6 +91,15 @@ function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=
   println("Plotting waveforms to $filepath")
   plot_waveforms(events.waveforms[:,1:count], filepath;
       bin_width_ns=bin_width_ns, cut=cut)
+  return events
+end
+
+
+function plot_waveforms(env::DLEnv, libs::Dict{Symbol, EventLibrary}; count=4, bin_width_ns=10, cut=nothing)
+  for (key,value) in libs
+    plot_waveforms(env, value; count=count, bin_width_ns=bin_width_ns, cut=cut)
+  end
+  return libs
 end
 
 export plot_waveform_thumbnail

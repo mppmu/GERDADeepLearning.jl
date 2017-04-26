@@ -1,7 +1,7 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
 using HDF5
-import Base: filter, length, getindex, haskey, copy, string, print, println
+import Base: filter, length, getindex, haskey, copy, string, print, println, deepcopy
 import HDF5: name
 
 
@@ -165,6 +165,18 @@ function copy(events::EventLibrary)
   end
   for (key,value) in events.prop
     result.prop[key] = value
+  end
+  return result
+end
+
+export deepcopy
+function deepcopy(events::EventLibrary)
+  result = EventLibrary(copy(events.waveforms))
+  for (key, value) in events.labels
+    result.labels[key] = copy(value)
+  end
+  for (key,value) in events.prop
+    result.prop[key] = copy(value)
   end
   return result
 end
