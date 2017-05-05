@@ -297,5 +297,6 @@ end
 
 export put_label!
 function put_label!(events::EventLibrary, label_name::Symbol, data::Vector{Float32})
+  @assert length(data) == length(events)
   events.labels[label_name] = data
 end

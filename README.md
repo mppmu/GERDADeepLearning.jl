@@ -45,32 +45,50 @@ env = DLEnv("/mypath", "myconfig.json") # custom path and config file
 ## Events and waveforms
 Lists of events with corresponding waveforms and other properties are encapsulated in the `EventLibrary` type.
 Waveforms are always stored column-wise in a matrix of `Float32`.
+
+The following code shows how to create an EventLibrary and access the contained data. Once initialized, the waveforms of an EventLibrary should not be edited anymore.
 ```julia
 # Create an EventLibrary from a matrix of waveforms (Float32 or Float64)
 events = EventLibrary(randn(Float32, 256, N))
 
-# Access waveforms
-events.waveforms # Matrix{Float32}
+# Access waveforms as Matrix{Float32}
+wf = waveforms(events)
 
-# Add an attribute per waveform
+# get the number of events
+N = length(events)
+```
+
+In addition to the waveform, events can be assigned further attributes. These are stored as a `Vector` of type `Float32`. The length of the vector must be equal to the number of events in the EventLibrary.
+```julia
+# Add an attribute of type Float32 to each event
 put_label!(events, :MyAttribute, randn(Float32, N))
 
-# Other attributes
-name(events) # retrieves the name as a String
+# Access the attribute
+myattr = events[:MyAttribute]
+```
+
+Each EventLibrary has a name which is used e.g. for naming files generated from these events. All libraries created from methods in GERDADeepLearning are given default names. If no name is set, the EventLibrary will show up as `<unnamed>`.
+```julia
+evtname = name(events) # String
 setname!(events, "myevents")
+```
 
-string(events) # also used in "$events" returns the name and event count
+It is often useful to access only a part of all events contained in an EventLibrary. EventLibraries therefore support subsets through indexing as well as filtering events by a specific attribute.
+```julia
+# get first 100 events
+selection = events[1:100]
 
-N = length(events) # get the number of events
+# filter events by label
+selection = filter(events, :MyAttribute, x -> x > 0)
+```
 
-selection = events[1:100] # get first 100 events
-selection = filter(events, :MyAttribute, x -> x > 0) # filter events by label
-events2 = copy(events) # create a shallow copy (references same waveforms and label arrays)
-events3 = deepcopy(events) # copies waveforms and labels
+The waveform array of an EventLibrary should not be edited after the library is created. To derive new libraries from old ones, it is often useful to copy these first. Copy methods not only copy the waveforms but also event attributes and other properties of the library.
+```julia
+# create a shallow copy, references same waveforms and label arrays
+copy(events)
 
-# IO functions are usually handled internally by DLEnv.
-
-get_classifiers(events); push_classifier(events, "Autoencoder") # used as labels by plotting commands
+# Also create copies of waveforms and label arrays
+deepcopy(events)
 ```
 
 GERDADeepLearning provides convenience functions for plotting waveforms.
@@ -81,6 +99,7 @@ plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
       bin_width_ns=10, cut=nothing, diagram_font=font(16))
 ```
 
+Reading and writing EventLibraries is usually handled by the framework and not the developer explicitely. Using the `get` function ensures that all progress of your script is saved automatically.
 
 
 ## Reading GERDA data
