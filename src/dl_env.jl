@@ -49,6 +49,10 @@ function resolvepath(env::DLEnv, path::AbstractString)
   end
 end
 
+function Base.joinpath(env::DLEnv, elements::String...)
+  return joinpath(env.dir, elements...)
+end
+
 
 export getdata
 """
@@ -179,5 +183,7 @@ end
 
 
 function network(env::DLEnv, name::String)
-    return NetworkInfo(name, joinpath(env.dir, "models"), get_properties(env, name))
+    dir = joinpath(env.dir, "models", name)
+    isdir(dir) || mkdir(dir)
+    return NetworkInfo(name, dir, get_properties(env, name))
 end

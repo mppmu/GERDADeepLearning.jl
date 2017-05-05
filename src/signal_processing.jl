@@ -21,6 +21,11 @@ function preprocess(env::DLEnv, sets::Dict{Symbol,EventLibrary}; steps_name="pre
   return result
 end
 
+export HE
+function HE(events::EventLibrary; copyf=deepcopy)
+  filter(events, :E, E -> E>1500)
+end
+
 # function preprocess(env::DLEnv, events::EventLibrary)
 # end
 

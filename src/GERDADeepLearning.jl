@@ -4,6 +4,7 @@
 
 module GERDADeepLearning
 
+include("gdl_util.jl")
 include("gerda_files.jl")
 
 

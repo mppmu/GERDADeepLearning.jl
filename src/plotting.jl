@@ -3,6 +3,17 @@
 using MXNet, Plots
 
 
+function plot_learning_curves(n::NetworkInfo, filename)
+  train = n.training_curve
+  xval = n.xval_curve
+  plot(size=(400,300))
+  plot!(train, label="Training set")
+  plot!(xval, label="Validation set")
+  xaxis!("Data passes")
+  yaxis!("Mean squared error")
+  savefig(filename)
+end
+
 export plot_autoencoder
 function plot_autoencoder(env::DLEnv, n::NetworkInfo)
   dir = joinpath(env.dir, "plots", n.name)
@@ -11,6 +22,7 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo)
 
   model = n.model
 
+  plot_learning_curves(n, joinpath(dir, "learning_curves.pdf"))
   visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
   visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
   println("Saved network plots to $dir")
@@ -33,7 +45,7 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=
   end
 
   provider = padded_array_provider(:data, data.waveforms, batch_size)
-  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=length(data), transform=transform)
+  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=length(data), transform=transform, bin_width_ns=sampling_period(data))
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
@@ -50,6 +62,7 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
     file_prefix="", sample_count=20, transform=identity,
     bin_width_ns=10, y_label="Current pulse", diagram_font=font(14)
     )
+  # plot_waveform_comparisons(encode_decode(...), ...)
   pred_evals = [transform(mx.predict(model, provider)) for model in models]
   truth = transform(waveforms)
 
@@ -67,9 +80,45 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
   end
 end
 
+export plot_waveform_comparisons
+function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, cut=nothing, diagram_font=font(14), transform=identity, title::String="", y_label="Current pulse")
+  diag_count = min(count, minimum(length.(libs)))
+  if diag_count != count
+    info("Diagram count reduced to $diag_count, requested: $count")
+  end
+  sample_count = minimum(samples.(libs))
+  x_axis = linspace(0, (sample_count-1)*sampling_period(libs[1])*1e9, sample_count)
+
+  # Create directory
+  dir = joinpath(env, "plots", title)
+  isdir(dir) || mkdir(dir)
+  println("Saving comparison plots to $dir ($(length(libs)) libraries)")
+
+  for i in 1:diag_count
+    plot(legendfont=diagram_font, legend=:topright)
+    for lib in libs
+      plot!(x_axis, waveforms(lib)[:,i], linewidth=2, label=name(lib))
+    end
+   xaxis!("Time (ns)", diagram_font)
+   yaxis!(y_label, diagram_font)
+
+   savefig(joinpath(dir, "wfcmp-$(join(name.(libs),"-"))$i.png"))
+  end
+  return libs
+end
+
+
 export plot_waveforms
-function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
-      bin_width_ns=10, cut=nothing, diagram_font=font(16))
+"""
+Plots a number of waveforms from the given EventLibrary in a single diagram. The figure is saved in the given environment using the name of the library.
+"""
+function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16))
+  count = min(count, length(events))
+  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
+  println("Plotting waveforms to $filepath")
+
+  data = events.waveforms[:,1:count]
+
   if cut != nothing
     data = data[cut,:]
   end
@@ -82,19 +131,13 @@ function plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
   xaxis!("Time (ns)", diagram_font)
   yaxis!("Current pulse", diagram_font)
   savefig(filepath)
-  return data
-end
 
-function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
-  count = min(count, length(events))
-  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
-  println("Plotting waveforms to $filepath")
-  plot_waveforms(events.waveforms[:,1:count], filepath;
-      bin_width_ns=bin_width_ns, cut=cut)
   return events
 end
 
-
+"""
+For each EventLibrary, a number of waveforms are plotted in one diagram. All figures are saved in the given environment using the names of the libraries.
+"""
 function plot_waveforms(env::DLEnv, libs::Dict{Symbol, EventLibrary}; count=4, bin_width_ns=10, cut=nothing)
   for (key,value) in libs
     plot_waveforms(env, value; count=count, bin_width_ns=bin_width_ns, cut=cut)
@@ -294,9 +337,7 @@ export plot_classifier
 function plot_classifier(env::DLEnv, name, libs::EventLibrary...;
     classifier_key=:psd, label_key=:SSE, plot_AoE=false)
   dir = joinpath(env.dir, "plots", "PSD")
-  if !isdir(dir)
-    mkdir(dir)
-  end
+  isdir(dir) || mkdir(dir)
 
   for lib in libs
     plot_classifier_histogram(dir, lib, label_key, classifier_key)

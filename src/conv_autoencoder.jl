@@ -140,11 +140,7 @@ function encode(events::EventLibrary, n::NetworkInfo)
 end
 
 function encode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo)
-  result = Dict{Symbol, EventLibrary}()
-  for (key, value) in sets
-    result[key] = encode(value, n)
-  end
-  return result
+  mapvalues(sets, encode, n)
 end
 
 export decode
@@ -171,14 +167,21 @@ function decode(compact::EventLibrary, n::NetworkInfo, pulse_size)
   return result
 end
 
+function decode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo, pulse_size)
+  mapvalues(sets, decode, n, pulse_size)
+end
+
 export mse
-function mse(n::NetworkInfo, events::EventLibrary)
+function mse(events::EventLibrary, n::NetworkInfo)
   provider = mx.ArrayDataProvider(:data => events.waveforms,
       :label => events.waveforms, batch_size=n["batch_size"])
   mse_result = eval(n.model, provider, mx.MSE())
   return mse_result[1][2]
 end
 
+function mse(libs::Dict{Symbol,EventLibrary}, n::NetworkInfo)
+  mapvalues(libs, mse, n)
+end
 
 export encode_decode
 function encode_decode(events::EventLibrary, n::NetworkInfo)
@@ -191,4 +194,8 @@ function encode_decode(events::EventLibrary, n::NetworkInfo)
   setname!(result, "$(name(result))_reconst")
   push_classifier!(result, "Autoencoder")
   return result
+end
+
+function encode_decode(libs::Dict{Symbol,EventLibrary}, n::NetworkInfo)
+  mapvalues(libs, encode_decode, n)
 end

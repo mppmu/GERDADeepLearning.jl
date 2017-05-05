@@ -73,6 +73,15 @@ events3 = deepcopy(events) # copies waveforms and labels
 get_classifiers(events); push_classifier(events, "Autoencoder") # used as labels by plotting commands
 ```
 
+GERDADeepLearning provides convenience functions for plotting waveforms.
+```julia
+# Plot a number of waveforms in one diagram
+plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
+plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
+      bin_width_ns=10, cut=nothing, diagram_font=font(16))
+```
+
+
 
 ## Reading GERDA data
 Reading the raw data from tier1 and tier4 as defined in the configuration is very simple.
@@ -130,6 +139,8 @@ Supported actions are:
 - `:refine` to load a previously trained network and continue training until the specified number of epochs is reached.
 - `:auto` (default) to let the library decide what action to take based upon previously saved data.
 
+In any case, the returned network handle is initialized with the parameters that gave the best result on the validation set.
+
 ### Autoencoder
 Use a convolutional autoencoder to move back and forth between original representation and compact representation (latent space).
 
@@ -177,6 +188,14 @@ Supported parameters in configuration file:
 }
 ```
 
+Visualizing an autoencoder can simply be done using one of the `plot_autoencoder` functions. These will plot the training curves, the convolutional filters and, when provided with events, a number of reconstructions.
+```julia
+# Plots reconstructions from the validation set and network visualization
+plot_autoencoder(env::DLEnv, n::NetworkInfo) # only network
+plot_autoencoder(env::DLEnv, n::NetworkInfo, data::Dict{Symbol,EventLibrary}; count=20, transform=identity) # network and reconstruction
+```
+
+
 
 ### DNN classifier
 Use a neural network with fully connected layers to classify a dataset.
@@ -204,19 +223,8 @@ Supported parameters in configuration file:
 }
 ```
 
-## Plotting
-GERDADeepLearning provides several plotting functions both for plotting waveforms and visualizing networks.
-
+Evaluating and plotting the performance of a trained classifier can be done simply by calling `plot_classifier`. This method takes any number of classified and labeled EventLibraries, calculates the efficiencies and plots various distributions and curves.
 ```julia
-# Plot a number of waveforms in one diagram
-plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing)
-plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
-      bin_width_ns=10, cut=nothing, diagram_font=font(16))
-
-# Plots reconstructions from the validation set and network visualization
-plot_autoencoder(env::DLEnv, n::NetworkInfo) # only network
-plot_autoencoder(env::DLEnv, n::NetworkInfo, data::Dict{Symbol,EventLibrary}; count=20, transform=identity) # network and reconstruction
-
 # Evaluates classifier efficiencies on the given datasets and plots results
 plot_classifier(env::DLEnv, name, libs::EventLibrary...;
     classifier_key=:psd, label_key=:SSE, plot_AoE=false)

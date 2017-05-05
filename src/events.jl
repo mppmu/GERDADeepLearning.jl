@@ -11,11 +11,33 @@ default_labels = [:aoeValues, :aoeClasses, :E]
 export EventLibrary
 type EventLibrary
   waveforms::Array{Float32, 2}
+  sampling_rate::Number # in Hz
   labels::Dict{Symbol,Vector{Float32}} # same length as waveforms
   prop::Dict{Symbol,Any}
 
   EventLibrary(waveforms::Matrix{Float64}) = EventLibrary(convert(Matrix{Float32}, waveforms))
-  EventLibrary(waveforms::Matrix{Float32}) = new(waveforms, Dict(), Dict())
+  EventLibrary(waveforms::Matrix{Float32}) = new(waveforms, 100e6, Dict(), Dict())
+end
+
+
+export waveforms
+function waveforms(events::EventLibrary)
+  return events.waveforms
+end
+
+export sampling_rate
+function sampling_rate(lib::EventLibrary)
+  return lib.sampling_rate
+end
+
+export sampling_period
+function sampling_period(lib::EventLibrary)
+  return 1/lib.sampling_rate
+end
+
+export samples
+function samples(lib::EventLibrary)
+  return size(lib.waveforms, 1)
 end
 
 export read_sets

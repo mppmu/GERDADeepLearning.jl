@@ -1,6 +1,6 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using MXNet
+using MXNet, Formatting
 
 import Base: getindex
 
@@ -44,7 +44,6 @@ function (cb::PlotCallback){T<:Real}(model :: Any, state :: mx.OptimizationState
   for index in 1:length(metric)
     key = metric[index][1]
     if !haskey(cb.graphs, key)
-      info("PlotCallback: creating key $key")
       cb.graphs[key] = Float32[]
     end
 
@@ -60,12 +59,10 @@ function calculate_parameters(model, filepath)
   total_parameter_count = 0
   for param in model.arg_params
     line = "Parameter $(param[1]) has shape $(size(param[2])) = $(length(param[2]))"
-    println(line)
     write(file, line*"\n")
     total_parameter_count += length(param[2])
   end
   lastline = "Total parameter count: $total_parameter_count"
-  println(lastline)
   write(file, lastline*"\n")
   close(file)
  end
@@ -125,14 +122,26 @@ end
    config::Dict
    model
    epoch::Integer # the current state of the model, initialized to 0.
+   training_curve::Vector{Float64} # MSE, created during training
+   xval_curve::Vector{Float64} # MSE, created on demand
 
    NetworkInfo(name::String, dir::AbstractString, config::Dict) =
-      new(name, dir, config, nothing, 0)
+      new(name, dir, config, nothing, 0, Float64[], Float64[])
  end
 
 export getindex
  function getindex(n::NetworkInfo, key)
   return n.config[key]
+end
+
+function save_compatible_heckpoint(sym :: mx.SymbolicNode, arg_params :: Dict{Base.Symbol, mx.NDArray}, aux_params :: Dict{Base.Symbol, mx.NDArray}, prefix :: AbstractString, epoch :: Int)
+  if epoch <= 1
+    mx.save("$prefix-symbol.json", sym)
+  end
+  save_dict = merge(Dict{Base.Symbol, mx.NDArray}(map((x) -> Symbol("arg:$(x[1])") => x[2], arg_params)),
+                    Dict{Base.Symbol, mx.NDArray}(map((x) -> Symbol("aux:$(x[1])") => x[2], aux_params)))
+  save_filename = format("{1}-{2:04d}.params", prefix, epoch)
+  mx.save(save_filename, save_dict)
 end
 
 
@@ -142,24 +151,39 @@ function train(n::NetworkInfo,
   learning_rate = n["learning_rate"]
   epochs = n["epochs"]
 
-  plot_cb = PlotCallback()
+  training_curve = PlotCallback()
+  eval_curve = Float64[]
 
   metric = mx.MSE()
 
   optimizer = mx.ADAM(lr=learning_rate)
   println("Training on device $xpu")
-  mx.fit(n.model, optimizer, train_provider,
-         n_epoch=epochs-n.epoch,
-         eval_metric=metric,
-         kvstore=:device,
-         callbacks=[plot_cb, mx.do_checkpoint(joinpath(n.dir,n.name))])
+  print("Starting training (from $(n.epoch+1) to $epochs)... ")
+  for epoch in (n.epoch+1) : epochs
+    print("$epoch ")
+    mx.fit(n.model, optimizer, train_provider,
+           n_epoch=1,
+           eval_metric=metric,
+           kvstore=:device,
+           callbacks=[training_curve],
+           verbosity=0)
+    save_compatible_heckpoint(n.model.arch, n.model.arg_params, n.model.aux_params, joinpath(n.dir,n.name), epoch)
+
+    eval_mse = eval(n.model, eval_provider, mx.MSE())
+    push!(eval_curve, eval_mse[1][2])
+  end
+  println()
 
   # TODO eval not implemented
 
   n.epoch = epochs
 
   calculate_parameters(n.model, joinpath(n.dir,n.name*"-parameters.txt"))
-  writedlm(joinpath(n.dir,n.name*"-mse.txt"), plot_cb.graphs[:MSE])
+
+  append!(n.training_curve, training_curve.graphs[:MSE])
+  append!(n.xval_curve, eval_curve)
+  writedlm(joinpath(n.dir,n.name*"-MSE-train.txt"), n.training_curve)
+  writedlm(joinpath(n.dir,n.name*"-MSE-xval.txt"), n.xval_curve)
 end
 
 
@@ -170,7 +194,7 @@ function build(n::NetworkInfo, method::Symbol,
   target_epoch = n["epochs"]
   slim = n["slim"]
 
-  if(slim > 0)
+  if(slim > 0 && method != :load)
     println("$(n.name): slim $(train_provider.sample_count) -> $slim")
     train_provider = slim_provider(train_provider, slim)
     if eval_provider != nothing
@@ -182,11 +206,13 @@ function build(n::NetworkInfo, method::Symbol,
     loss, net = build_function(n.config, size(train_provider.data_arrays[1],1))
     n.model = mx.FeedForward(loss, context=xpu)
     train(n, train_provider, eval_provider, xpu)
+    load_network(n, target_epoch)
   elseif method == :load
     load_network(n, target_epoch)
   elseif method == :refine
-    load_network(n, -1)
+    load_network(n, -1; pick_best=false)
     train(n, train_provider, eval_provider, xpu)
+    load_network(n, target_epoch)
   else
     throw(ArgumentError("method must be train, load or refine. got $method"))
   end
@@ -232,15 +258,30 @@ end
 
 
 
- function load_network(n::NetworkInfo, epoch; output_name="softmax", delete_unneeded_arguments=true)
-   if epoch < 0
-     epoch = last_epoch(n.dir, n.name)
+ function load_network(n::NetworkInfo, max_epoch; output_name="softmax", delete_unneeded_arguments=true, pick_best=true)
+   if max_epoch < 0
+     max_epoch = last_epoch(n.dir, n.name)
    end
 
+  n.training_curve = readdlm(joinpath(n.dir, "$(n.name)-MSE-train.txt"))[:,1]
+  n.xval_curve = readdlm(joinpath(n.dir, "$(n.name)-MSE-xval.txt"))[:,1]
+
+  if pick_best
+    epoch = findmin(n.xval_curve)[2]
+    println("$(n.name): best epoch is $epoch.")
+  else
+    epoch = max_epoch
+  end
+
+   load_network_checkpoint(n, epoch; output_name=output_name, delete_unneeded_arguments=delete_unneeded_arguments)
+
+   return n
+ end
+
+ function load_network_checkpoint(n::NetworkInfo, epoch; output_name="softmax", delete_unneeded_arguments=true)
    sym, arg_params, aux_params = mx.load_checkpoint(joinpath(n.dir, n.name), epoch)
    n.model = subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments)
    n.epoch = epoch
-   return n
  end
 
  function subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments; xpu=best_device())
