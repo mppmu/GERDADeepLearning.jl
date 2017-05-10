@@ -144,6 +144,30 @@ function save_compatible_heckpoint(sym :: mx.SymbolicNode, arg_params :: Dict{Ba
   mx.save(save_filename, save_dict)
 end
 
+function mx_create_kvstore(kv_type :: Base.Symbol, num_device :: Int, arg_params :: Dict{Base.Symbol,mx.NDArray})
+  if num_device == 1 && !ismatch(r"dist", string(kv_type))
+    kv = nothing
+  else
+    if kv_type == :local
+      max_size = maximum([prod(size(param)) for (k,param) in arg_params])
+      if max_size < 1024 * 1024 * 16
+        kv_type = :local_update_cpu
+      else
+        kv_type = :local_allreduce_cpu
+      end
+      info("Auto-select kvstore type = $kv_type")
+    end
+    kv = mx.KVStore(kv_type)
+  end
+
+  update_on_kvstore = true
+  if isa(kv, Void) || ismatch(r"local_allreduce", string(mx.get_type(kv)))
+    update_on_kvstore = false
+  end
+
+  return (kv, update_on_kvstore)
+end
+
 
 function train(n::NetworkInfo,
       train_provider, eval_provider,
@@ -157,29 +181,30 @@ function train(n::NetworkInfo,
   metric = mx.MSE()
 
   optimizer = mx.ADAM(lr=learning_rate)
-  println("Training on device $xpu")
-  print("Starting training (from $(n.epoch+1) to $epochs)... ")
+  info("Training on device $xpu")
+  info("Starting training (from $(n.epoch+1) to $epochs)... ")
 
-  kvstore = mx.KVStore(:device)
-  update_on_kvstore = true
-  # kvstore, update_on_kvstore = mx._create_kvstore(:device, length(n.model.ctx), n.model.arg_params)
+  # if !isdefined(n.model, :arg_params)
+  #   mx.init_model(n.model, mx.UniformInitializer(0.01); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
+  # end
+  # kvstore, update_on_kvstore = mx_create_kvstore(:device, length(n.model.ctx), n.model.arg_params)
 
   for epoch in (n.epoch+1) : epochs
-    print("$epoch ")
+    info("Epoch $epoch / $epochs")
     mx.fit(n.model, optimizer, train_provider,
            n_epoch=1,
            eval_metric=metric,
            callbacks=[training_curve],
            verbosity=0,
-           kvstore=kvstore)
+           kvstore=:device)
     save_compatible_heckpoint(n.model.arch, n.model.arg_params, n.model.aux_params, joinpath(n.dir,n.name), epoch)
 
     eval_mse = eval(n.model, eval_provider, mx.MSE())
     push!(eval_curve, eval_mse[1][2])
   end
-  println()
 
-  # TODO eval not implemented
+  # mx.fit(n.model, optimizer, train_provider,
+  # n_epoch=epochs, eval_metric=metric, callbacks=[training_curve], kvstore=:device)
 
   n.epoch = epochs
 
@@ -200,7 +225,7 @@ function build(n::NetworkInfo, method::Symbol,
   slim = n["slim"]
 
   if(slim > 0 && method != :load)
-    println("$(n.name): slim $(train_provider.sample_count) -> $slim")
+    info("$(n.name): slim $(train_provider.sample_count) -> $slim")
     train_provider = slim_provider(train_provider, slim)
     if eval_provider != nothing
       eval_provider = slim_provider(eval_provider, slim)
@@ -273,7 +298,7 @@ end
 
   if pick_best
     epoch = findmin(n.xval_curve)[2]
-    println("$(n.name): best epoch is $epoch.")
+    info("$(n.name): best epoch is $epoch.")
   else
     epoch = max_epoch
   end

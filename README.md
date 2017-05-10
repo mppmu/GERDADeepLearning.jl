@@ -27,7 +27,7 @@ The project configuration is read from a JSON file upon creation of a `DLEnv`.
 		"xval": [0.1, 0],
 		"test": [0, 1]
 	},
-	"detectors": [9],
+	"detectors": [0, "GD61C", 39],
 	"test-pulses": "exclude",
 	"baseline-events": "include",
 	"unphysical-events": "only",

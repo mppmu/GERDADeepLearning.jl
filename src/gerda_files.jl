@@ -32,3 +32,24 @@ export parse_keylist
 function parse_keylist(keylist_file::AbstractString)
   return [FileKey(id) for id in readlines(open(keylist_file))]
 end
+
+
+phase2_detectors = ["GD91A", "GD35B", "GD02B", "GD00B", "GD61A", "GD89B", "GD02D", "GD91C", # string1
+		"ANG5", "RG1", "ANG3", # string2
+		"GD02A", "GD32B", "GD32A", "GD32C", "GD89C", "GD61C",  "GD76B", "GD00C", # string3
+		"GD35C", "GD76C", "GD89D", "GD00D", "GD79C", "GD35A", "GD91B", "GD61B", # string4
+		"ANG2", "RG2", "ANG4", # string 5
+		"GD00A", "GD02C", "GD79B", "GD91D", "GD32D", "GD89A", "ANG1", # string6
+		"GTF112", "GTF32", "GTF45_2" # string7
+    ]
+
+export get_detector_index
+function get_detector_index(detector_name::String)
+  return find(n->n==detector_name, phase2_detectors)[1] - 1
+end
+
+
+export parse_detectors
+function parse_detectors(list::Vector)
+  return [(isa(det,Integer) ? det : get_detector_index(det)) for det in list]
+end

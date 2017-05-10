@@ -81,7 +81,7 @@ function autoencoder(env::DLEnv,
 
   if action == :auto
     action = decide_best_action(network(env,id))
-    println("$id: auto-selected action is $action")
+    info("$id: auto-selected action is $action")
   end
 
   n = network(env, id)
@@ -108,7 +108,7 @@ function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
 
   if action == :auto
     action = decide_best_action(network(env,id))
-    println("$id: auto-selected action is $action")
+    info("$id: auto-selected action is $action")
   end
 
   n = network(env, id)
@@ -126,7 +126,7 @@ end
 
 export encode
 function encode(events::EventLibrary, n::NetworkInfo)
-  println("$(n.name): encoding '$(name(events))'...")
+  info("$(n.name): encoding '$(name(events))'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true)
   provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=n["batch_size"])
@@ -145,7 +145,7 @@ end
 
 export decode
 function decode(compact::EventLibrary, n::NetworkInfo, pulse_size)
-  println("$(n.name): decoding '$(name(compact))'...")
+  info("$(n.name): decoding '$(name(compact))'...")
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training

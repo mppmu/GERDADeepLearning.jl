@@ -43,8 +43,10 @@ function read_tiers_1_4(
   for (file_i,filekey) in enumerate(files)
     file1 = path(base_path, filekey, :tier1)
     file4 = path(base_path, filekey, :tier4)
-    if !isfile(file1) || !isfile(file4)
-      info("Skipping because files don't exist: $filekey")
+    if !isfile(file1)
+      info("Skipping entry because tier1 file does not exist: $file1")
+    elseif !isfile(file4)
+        info("Skipping entry because tier4 file does not exist: $file4")
     else
       tier4_tchain = TChain("tier4", file4)
       tier1_tree = open(MGTEventTree{JlMGTEvent}, file1)

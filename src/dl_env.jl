@@ -109,7 +109,7 @@ function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
     end
     sets = read_tiers_1_4(env.config["path"], keylist,
         set_names=set_names, set_sizes=set_sizes,
-        select_channels=env.config["detectors"])
+        select_channels=parse_detectors(env.config["detectors"]))
     sets = _builtin_filter(env, "test-pulses", sets, :isTP, isTP -> isTP == 0)
     sets = _builtin_filter(env, "baseline-events", sets, :isBL, isBL -> isBL == 0)
     sets = _builtin_filter(env, "unphysical-events", sets, :E, E -> (E > 0) && (E < 9999))
