@@ -18,14 +18,14 @@ export plot_autoencoder
 function plot_autoencoder(env::DLEnv, n::NetworkInfo)
   dir = joinpath(env.dir, "plots", n.name)
   isdir(dir) || mkdir(dir)
-  println("Generating plots in $dir...")
+  info("Generating plots in $dir...")
 
   model = n.model
 
   plot_learning_curves(n, joinpath(dir, "learning_curves.pdf"))
   visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
   visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
-  println("Saved network plots to $dir")
+  info("Saved network plots to $dir")
   return model, dir
 end
 
@@ -49,10 +49,10 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
-  #   println(file, mx.to_graphviz(loss))
+  #   info(file, mx.to_graphviz(loss))
   # end
 
-  println("Saved reconstruction plots to $dir")
+  info("Saved reconstruction plots to $dir")
 
   return model, dir
 end
@@ -92,7 +92,7 @@ function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, 
   # Create directory
   dir = joinpath(env, "plots", title)
   isdir(dir) || mkdir(dir)
-  println("Saving comparison plots to $dir ($(length(libs)) libraries)")
+  info("Saving comparison plots to $dir ($(length(libs)) libraries)")
 
   for i in 1:diag_count
     plot(legendfont=diagram_font, legend=:topright)
@@ -112,12 +112,16 @@ export plot_waveforms
 """
 Plots a number of waveforms from the given EventLibrary in a single diagram. The figure is saved in the given environment using the name of the library.
 """
-function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16))
-  count = min(count, length(events))
+function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16), evt_indices=nothing)
   filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
-  println("Plotting waveforms to $filepath")
+  info("Plotting waveforms to $filepath")
 
-  data = events.waveforms[:,1:count]
+  if evt_indices == nothing
+    count = min(count, length(events))
+    data = events.waveforms[:,1:count]
+  else
+    data = events.waveforms[:, evt_indices]
+  end
 
   if cut != nothing
     data = data[cut,:]

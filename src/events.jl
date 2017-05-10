@@ -35,8 +35,8 @@ function sampling_period(lib::EventLibrary)
   return 1/lib.sampling_rate
 end
 
-export samples
-function samples(lib::EventLibrary)
+export sample_size
+function sample_size(lib::EventLibrary)
   return size(lib.waveforms, 1)
 end
 
@@ -131,8 +131,7 @@ end
 
 export filter
 function filter(events::EventLibrary, predicate_key=:E, predicate=e->((e>600) && (e<10000)))
-  list = events.labels[predicate_key]
-  indices = find(predicate, list)
+  indices = find(predicate, events.labels[predicate_key])
   return events[indices]
 end
 
@@ -140,6 +139,16 @@ function filter(sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
   result = Dict{Symbol,EventLibrary}()
   for (key, lib) in sets
     result[key] = filter(lib, predicate_key, predicate)
+  end
+  return result
+end
+
+export filter_by_proxy
+function filter_by_proxy(sets::Dict{Symbol,EventLibrary}, predicate_sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
+  result = Dict{Symbol,EventLibrary}()
+  for (key, lib) in sets
+    indices = find(predicate, predicate_sets[key].labels[predicate_key])
+    result[key] = lib[indices]
   end
   return result
 end
@@ -171,6 +180,15 @@ end
 export length
 function length(events::EventLibrary)
   return size(events.waveforms, 2)
+end
+
+export totallength
+function totallength(sets::Dict{Symbol,EventLibrary})
+  result = 0
+  for (key, events) in sets
+    result += length(events)
+  end
+  return result
 end
 
 export haskey

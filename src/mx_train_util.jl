@@ -159,14 +159,19 @@ function train(n::NetworkInfo,
   optimizer = mx.ADAM(lr=learning_rate)
   println("Training on device $xpu")
   print("Starting training (from $(n.epoch+1) to $epochs)... ")
+
+  kvstore = mx.KVStore(:device)
+  update_on_kvstore = true
+  # kvstore, update_on_kvstore = mx._create_kvstore(:device, length(n.model.ctx), n.model.arg_params)
+
   for epoch in (n.epoch+1) : epochs
     print("$epoch ")
     mx.fit(n.model, optimizer, train_provider,
            n_epoch=1,
            eval_metric=metric,
-           kvstore=:device,
            callbacks=[training_curve],
-           verbosity=0)
+           verbosity=0,
+           kvstore=kvstore)
     save_compatible_heckpoint(n.model.arch, n.model.arg_params, n.model.aux_params, joinpath(n.dir,n.name), epoch)
 
     eval_mse = eval(n.model, eval_provider, mx.MSE())

@@ -20,16 +20,21 @@ The project configuration is read from a JSON file upon creation of a `DLEnv`.
 ```json
 # config.json example
 {
-"path": "/remote/ceph/group/gerda/data/phase2/blind/v02.06/gen",
-"keylists": ["run0062.txt", "run0063.txt"],
-"sets":{
-	"train": [0.9, 0],
-	"xval": [0.1, 0],
-	"test": [0, 1]
-},
-"detectors": [22, 30],
-"cache": true,
-"preprocessing": ["normalize_energy"]
+	"path": "/remote/ceph/group/gerda/data/psa-skim/pholl/ch09",
+	"keylists": ["run0063-cal-some.txt", "run0062-cal-some.txt"],
+	"sets":{
+		"train": [0.9, 0],
+		"xval": [0.1, 0],
+		"test": [0, 1]
+	},
+	"detectors": [9],
+	"test-pulses": "exclude",
+	"baseline-events": "include",
+	"unphysical-events": "only",
+
+	"preprocessing": ["baseline", "normalize_energy", "align_peaks"],
+
+	"cache": true
 }
 ```
 The configuration file references all keylists which belong to the project and how to split their events into custom data sets. The example above creates a training set from 90% of the events from run 62, a cross validation set from the remaining 10% and a test set from run 63.
@@ -73,6 +78,8 @@ evtname = name(events) # String
 setname!(events, "myevents")
 ```
 
+Other properties that are commonly added to EventLibraries are `:preprocessing`, `waveform_type`.
+
 It is often useful to access only a part of all events contained in an EventLibrary. EventLibraries therefore support subsets through indexing as well as filtering events by a specific attribute.
 ```julia
 # get first 100 events
@@ -102,16 +109,20 @@ plot_waveforms(data::Array{Float32, 2}, filepath::AbstractString;
 Reading and writing EventLibraries is usually handled by the framework and not the developer explicitely. Using the `get` function ensures that all progress of your script is saved automatically.
 
 
-## Reading GERDA data
+## Reading & Preprocessing GERDA Data
 Reading the raw data from tier1 and tier4 as defined in the configuration is very simple.
 ```julia
-datasets = getdata(env) # Dict{Symbol,EventLibrary}
+datasets = getdata(env; preprocessed=false) # Dict{Symbol,EventLibrary}
 ```
 This command reads all files referenced by the keylists in the configuration file and returns a dictionary mapping dataset names to the corresponding `EventLibrary`. Individual sets can be accessed through their declared name as a `Symbol`.
 ```julia
 training_set = datasets[:train]
 ```
-If the `cache` in the configuration is set to true, this will cause either the data to be read from cache if available or a cache to be created.
+If the argument `preprocessed` is set to `true`, the preprocessing chain defined in the config file will be executed and the preprocessed data is returned.
+
+If the `cache` in the configuration is set to true, this will cause either the data to be read from cache if available or a cache to be created. Note that the raw data and the preprocessed data are cached in different files.
+
+Note that the framework checks whether the the cache of `preprocessed` is up to date but does not check whether the data cache is still valid. Therefore either delete the data data.h5 directly or through `delete!(env,"data")` after changing your data references in the configuration.
 
 ## Data processing: Defining a processing chain
 Many processing steps take a `Dict{Symbol,EventLibrary}` as input and return one. As processing might be computationally expensive, it is usually useful to cache the result of a step and skip processing next time.

@@ -64,10 +64,40 @@ If caching is active (set in config.json), the cached data will be read if avail
 Otherwise a new cache file will be created.
 If overwrite_existing is set to true, the original data is read and optionally cached.
 """
-function getdata(env::DLEnv; targets::Array{String}=String[])
+function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[])
+  if !preprocessed
+    return _get_raw_data(env; targets=targets)
+  else
+    data = _get_raw_data(env; targets=["preprocessed"])
+    preprocessed = get(env, "preprocessed"; targets=targets) do
+      preprocess(env, data)
+    end
+    if preprocessed == nothing
+      return nothing
+    end
+    # Else check whether cache is up to date
+    steps = env.config["preprocessing"]
+    cache_up_to_date = true
+    for (key,events) in preprocessed
+      cached_steps = events[:preprocessing]
+      if cached_steps != steps
+        cache_up_to_date = false
+      end
+    end
+    if cache_up_to_date
+      return preprocessed
+    else
+      info("Refreshing cache of 'preprocessed'.")
+      delete!(env, "preprocessed")
+      return getdata(env; preprocessed=true, targets=targets)
+    end
+  end
+end
+
+function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
   data = get(env, "data"; targets=targets) do
     # Else read original data
-    println("Reading original data from $(env.config["path"])")
+    info("Reading original data from $(env.config["path"])")
     keylist = FileKey[]
     setdict = _setdict(env)
     set_names = collect(keys(setdict))
@@ -77,15 +107,38 @@ function getdata(env::DLEnv; targets::Array{String}=String[])
       push!(keylist, new_keys...)
       push!(set_sizes, fill([setdict[setname][i] for setname in set_names], length(new_keys))...)
     end
-    sets = read_tier_W(env.config["path"], keylist,
+    sets = read_tiers_1_4(env.config["path"], keylist,
         set_names=set_names, set_sizes=set_sizes,
         select_channels=env.config["detectors"])
+    sets = _builtin_filter(env, "test-pulses", sets, :isTP, isTP -> isTP == 0)
+    sets = _builtin_filter(env, "baseline-events", sets, :isBL, isBL -> isBL == 0)
+    sets = _builtin_filter(env, "unphysical-events", sets, :E, E -> (E > 0) && (E < 9999))
     return sets
   end
+
   if data != nothing
-    for (n, set) in data println(summary(set)) end
+    for (n, set) in data info(summary(set)) end
   end
   return data
+end
+
+
+
+
+function _builtin_filter(env::DLEnv, ftype_key::String, sets::Dict{Symbol, EventLibrary}, label, exclude_prededicate)
+  ftype = env.config[ftype_key]
+  if ftype == "exclude"
+    before = totallength(sets)
+    result = filter(sets, label, exclude_prededicate)
+    info("Excluded $(before-(totallength(result))) $ftype_key of $before events.")
+    return result
+  elseif ftype == "include"
+    return sets
+  elseif ftype == "only"
+    return filter(sets, label, x -> !exclude_prededicate(x))
+  else
+    throw(ArgumentError("Unknown filter keyword in configuration $ftype_key: $ftype"))
+  end
 end
 
 
@@ -113,14 +166,14 @@ end
 export get
 function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[])
   if !isempty(targets) && containsall(env, targets)
-    println("Skipping retrieval of '$lib_name'.")
+    info("Skipping retrieval of '$lib_name'.")
     return nothing
   end
   if contains(env, lib_name)
-    println("Retrieving '$lib_name' from cache.")
+    info("Retrieving '$lib_name' from cache.")
     return get(env, lib_name)
   else
-    println("Computing '$lib_name'...")
+    info("Computing '$lib_name'...")
     data = compute()
 
     # check type
@@ -174,6 +227,18 @@ function _ensure_ext_loaded(env::DLEnv, lib_name::String)
     else
       env._ext_event_libs[lib_name] = Dict()
     end
+  end
+end
+
+function Base.delete!(env::DLEnv, lib_name::String)
+  if haskey(env._ext_event_libs, lib_name)
+    delete!(env._ext_event_libs, lib_name)
+  end
+  # Delete cache file (even if cache is set to false)
+  file = _cachefile(env, lib_name)
+  if isfile(file)
+    rm(file)
+    info("Deleted cached $lib_name")
   end
 end
 
