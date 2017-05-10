@@ -120,6 +120,20 @@ training_set = datasets[:train]
 ```
 If the argument `preprocessed` is set to `true`, the preprocessing chain defined in the config file will be executed and the preprocessed data is returned.
 
+Supported preprocessing functions are
+```
+baseline # Subtract starting baseline and invert the charge pulse.
+normalize_energy # Normalize end of charge pulse to one.
+align_midpoints # Aligns the 50% positions to the center cutting a 256 samples window.
+align_peaks # Aligns the maximum values in the current pulse to the center cutting a 256 samples window.
+
+# Switch between charge / current representations
+integrate
+differentiate
+
+HE # Select only pulses with E > 1500 keV.
+```
+
 If the `cache` in the configuration is set to true, this will cause either the data to be read from cache if available or a cache to be created. Note that the raw data and the preprocessed data are cached in different files.
 
 Note that the framework checks whether the the cache of `preprocessed` is up to date but does not check whether the data cache is still valid. Therefore either delete the data data.h5 directly or through `delete!(env,"data")` after changing your data references in the configuration.

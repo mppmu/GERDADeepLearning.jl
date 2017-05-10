@@ -15,19 +15,17 @@ function preprocess(env::DLEnv, sets::Dict{Symbol,EventLibrary}; steps_name="pre
 
   # perform the steps
   for (i,step) in enumerate(steps)
-    print("Preprocesing $step:")
+    info("Preprocesing $step.")
     pfunction = eval(parse(step))
     for (key, events) in result
-      print(" $key")
       result[key] = pfunction(events)
     end
-    println(".")
   end
 
   for (key, events) in result
     failed_count = length(find(f -> f != 0, events[:FailedPreprocessing]))
     if failed_count > 0
-      info("Preprocesing failed for $failed_count events in $key.")
+      info("Preprocesing failed for $failed_count events in $key. These have been tagged with the label :FailedPreprocessing = 1")
     end
   end
 
@@ -36,7 +34,7 @@ end
 
 
 export charge_pulses
-function charge_pulses(events::EventLibrary, create_new)
+function charge_pulses(events::EventLibrary; create_new=true)
   if events[:waveform_type] == "charge"
     return events
   elseif events[:waveform_type] == "current"
@@ -55,7 +53,7 @@ function charge_pulses(events::EventLibrary, create_new)
 end
 
 export current_pulses
-function current_pulses(events::EventLibrary, create_new)
+function current_pulses(events::EventLibrary; create_new=true)
   if events[:waveform_type] == "current"
     return events
   elseif events[:waveform_type] == "charge"
@@ -67,7 +65,7 @@ function current_pulses(events::EventLibrary, create_new)
     if create_new
       events = deepcopy(events)
     end
-    return current_pulses(raw_to_charge(events), false)
+    return current_pulses(raw_to_charge(events); create_new=false)
   else
     throw(ArgumentError("EventLibrary must be of type current or charge."))
   end
@@ -89,7 +87,7 @@ end
 
 export baseline
 function baseline(events::EventLibrary)
-  events = charge_pulses(events, false)
+  events = charge_pulses(events; create_new=false)
 
   bl_size = Int64(round(sample_size(events) / 5))
   weights = hamming(bl_size)
@@ -108,7 +106,7 @@ end
 
 export align_peaks
 function align_peaks(events::EventLibrary; target_length=256)
-  currents = current_pulses(events, true)
+  currents = current_pulses(events; create_new=true)
 
   s = sample_size(events)
   half = Int64(target_length/2)
@@ -130,7 +128,7 @@ end
 
 export align_centers
 function align_midpoints(events::EventLibrary; center_y=0.5, target_length=256)
-  charges = charge_pulses(events, true)
+  charges = charge_pulses(events; create_new=true)
 
   s = sample_size(events)
   half = Int64(target_length/2)
@@ -152,7 +150,7 @@ end
 
 export normalize_energy
 function normalize_energy(events::EventLibrary; value=1)
-  charges = charge_pulses(events, true)
+  charges = charge_pulses(events; create_new=true)
 
   top_size = Int64(round(sample_size(events) / 5))
   weights = hamming(top_size)
