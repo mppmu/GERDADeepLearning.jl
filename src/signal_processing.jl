@@ -15,9 +15,10 @@ function preprocess(env::DLEnv, sets::Dict{Symbol,EventLibrary}; steps_name="pre
 
   # perform the steps
   for (i,step) in enumerate(steps)
-    info("Preprocesing $step.")
+    info(env, 2, "Preprocesing $step.")
     pfunction = eval(parse(step))
     for (key, events) in result
+      info(env, 3, "Preprocesing $step: $key.")
       result[key] = pfunction(events)
     end
   end
@@ -25,7 +26,7 @@ function preprocess(env::DLEnv, sets::Dict{Symbol,EventLibrary}; steps_name="pre
   for (key, events) in result
     failed_count = length(find(f -> f != 0, events[:FailedPreprocessing]))
     if failed_count > 0
-      info("Preprocesing failed for $failed_count events in $key. These have been tagged with the label :FailedPreprocessing = 1")
+      info(env, 1, "Preprocesing failed for $failed_count events in $key. These have been tagged with the label :FailedPreprocessing = 1")
     end
   end
 

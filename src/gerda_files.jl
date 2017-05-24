@@ -2,20 +2,32 @@
 
 
 export FileKey
-type FileKey
+immutable FileKey
   run::Integer
   event_type::Symbol # :cal, :phy
   fileid::AbstractString
+  id::AbstractString
 
   function FileKey(id::AbstractString)
+    id = strip(id)
     if id[1:6] != "gerda-"
       throw(ArgumentError("$id is not a valid file identifier"))
     end
     run = parse(Int, id[10:13])
     event_type = Symbol(id[32:34])
     fileid = id[15:30]
-    return new(run, event_type, fileid)
+    return new(run, event_type, fileid, id)
   end
+end
+
+function Base.string(key::FileKey)
+  return key.id
+end
+
+export KeyList
+immutable KeyList
+  name::String
+  entries::Vector{FileKey}
 end
 
 export path
@@ -29,8 +41,22 @@ function path(base_dir::AbstractString, key::FileKey, tier)
 end
 
 export parse_keylist
-function parse_keylist(keylist_file::AbstractString)
-  return [FileKey(id) for id in readlines(open(keylist_file))]
+function parse_keylist(keylist_file::AbstractString, name::String)
+  entries = [FileKey(id) for id in readlines(open(keylist_file))]
+  return KeyList(name, entries)
+end
+
+export name
+function name(keylist::KeyList)
+  return keylist.name
+end
+
+function Base.merge(keylists::KeyList...)
+  return KeyList("", vcat([kl.entries for kl in keylists]...))
+end
+
+function Base.length(keylist::KeyList)
+  return length(keylist.entries)
 end
 
 

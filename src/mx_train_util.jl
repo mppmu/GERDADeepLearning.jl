@@ -171,7 +171,7 @@ end
 
 function train(n::NetworkInfo,
       train_provider, eval_provider,
-      xpu)
+      xpu; verbosity=2)
   learning_rate = n["learning_rate"]
   epochs = n["epochs"]
 
@@ -181,8 +181,7 @@ function train(n::NetworkInfo,
   metric = mx.MSE()
 
   optimizer = mx.ADAM(lr=learning_rate)
-  info("Training on device $xpu")
-  info("Starting training (from $(n.epoch+1) to $epochs)... ")
+  verbosity >= 2 && info("Starting training on $xpu (from $(n.epoch+1) to $epochs)... ")
 
   # if !isdefined(n.model, :arg_params)
   #   mx.init_model(n.model, mx.UniformInitializer(0.01); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
@@ -190,7 +189,7 @@ function train(n::NetworkInfo,
   # kvstore, update_on_kvstore = mx_create_kvstore(:device, length(n.model.ctx), n.model.arg_params)
 
   for epoch in (n.epoch+1) : epochs
-    info("Epoch $epoch / $epochs")
+    verbosity >= 2 && info("Epoch $epoch / $epochs")
     mx.fit(n.model, optimizer, train_provider,
            n_epoch=1,
            eval_metric=metric,
@@ -219,13 +218,13 @@ end
 
 function build(n::NetworkInfo, method::Symbol,
     train_provider, eval_provider, build_function;
-    xpu=best_device()
+    xpu=best_device(), verbosity=2
   )
   target_epoch = n["epochs"]
   slim = n["slim"]
 
   if(slim > 0 && method != :load)
-    info("$(n.name): slim $(train_provider.sample_count) -> $slim")
+    verbosity >= 2 && info("$(n.name): slim $(train_provider.sample_count) -> $slim")
     train_provider = slim_provider(train_provider, slim)
     if eval_provider != nothing
       eval_provider = slim_provider(eval_provider, slim)
@@ -235,13 +234,13 @@ function build(n::NetworkInfo, method::Symbol,
   if method == :train
     loss, net = build_function(n.config, size(train_provider.data_arrays[1],1))
     n.model = mx.FeedForward(loss, context=xpu)
-    train(n, train_provider, eval_provider, xpu)
+    train(n, train_provider, eval_provider, xpu; verbosity=verbosity)
     load_network(n, target_epoch)
   elseif method == :load
     load_network(n, target_epoch)
   elseif method == :refine
     load_network(n, -1; pick_best=false)
-    train(n, train_provider, eval_provider, xpu)
+    train(n, train_provider, eval_provider, xpu; verbosity=verbosity)
     load_network(n, target_epoch)
   else
     throw(ArgumentError("method must be train, load or refine. got $method"))

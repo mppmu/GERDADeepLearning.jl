@@ -18,14 +18,14 @@ export plot_autoencoder
 function plot_autoencoder(env::DLEnv, n::NetworkInfo)
   dir = joinpath(env.dir, "plots", n.name)
   isdir(dir) || mkdir(dir)
-  info("Generating plots in $dir...")
+  info(env, 2, "Generating plots in $dir...")
 
   model = n.model
 
   plot_learning_curves(n, joinpath(dir, "learning_curves.pdf"))
   visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
   visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
-  info("Saved network plots to $dir")
+  info(env, 2, "Saved network plots to $dir")
   return model, dir
 end
 
@@ -52,7 +52,7 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=
   #   info(file, mx.to_graphviz(loss))
   # end
 
-  info("Saved reconstruction plots to $dir")
+  info(env, 2, "Saved reconstruction plots to $dir")
 
   return model, dir
 end
@@ -84,7 +84,7 @@ export plot_waveform_comparisons
 function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, cut=nothing, diagram_font=font(14), transform=identity, title::String="", y_label="Current pulse")
   diag_count = min(count, minimum(length.(libs)))
   if diag_count != count
-    info("Diagram count reduced to $diag_count, requested: $count")
+    info(env, 2, "Diagram count reduced to $diag_count, requested: $count")
   end
   sample_count = minimum(samples.(libs))
   x_axis = linspace(0, (sample_count-1)*sampling_period(libs[1])*1e9, sample_count)
@@ -92,7 +92,7 @@ function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, 
   # Create directory
   dir = joinpath(env, "plots", title)
   isdir(dir) || mkdir(dir)
-  info("Saving comparison plots to $dir ($(length(libs)) libraries)")
+  info(env, 2, "Saving comparison plots to $dir ($(length(libs)) libraries)")
 
   for i in 1:diag_count
     plot(legendfont=diagram_font, legend=:topright)
@@ -114,7 +114,7 @@ Plots a number of waveforms from the given EventLibrary in a single diagram. The
 """
 function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16), evt_indices=nothing)
   filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
-  info("Plotting waveforms to $filepath")
+  info(env, 2, "Plotting waveforms to $filepath")
 
   if evt_indices == nothing
     count = min(count, length(events))

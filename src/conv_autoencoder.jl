@@ -81,7 +81,7 @@ function autoencoder(env::DLEnv,
 
   if action == :auto
     action = decide_best_action(network(env,id))
-    info("$id: auto-selected action is $action")
+    info(env, 2, "$id: auto-selected action is $action")
   end
 
   n = network(env, id)
@@ -91,7 +91,8 @@ function autoencoder(env::DLEnv,
   eval_provider = mx.ArrayDataProvider(:data => eval_data.waveforms,
       :label => eval_data.waveforms, batch_size=n["batch_size"])
 
-  build(n, action, train_provider, eval_provider, _build_conv_autoencoder)
+  build(n, action, train_provider, eval_provider, _build_conv_autoencoder;
+  verbosity=get_verbosity(env))
   return n
 end
 
@@ -108,7 +109,7 @@ function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
 
   if action == :auto
     action = decide_best_action(network(env,id))
-    info("$id: auto-selected action is $action")
+    info(env, 2, "$id: auto-selected action is $action")
   end
 
   n = network(env, id)
@@ -119,14 +120,15 @@ function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
       :label => target_datasets[xval_key].waveforms, batch_size=n["batch_size"])
 
   full_size = size(target_datasets[train_key].waveforms, 1)
-  build(n, action, train_provider, eval_provider, (p, s) -> _build_conv_decoder(full_size, p, s))
+  build(n, action, train_provider, eval_provider, (p, s) -> _build_conv_decoder(full_size, p, s);
+  verbosity=get_verbosity(env))
   return n
 end
 
 
 export encode
-function encode(events::EventLibrary, n::NetworkInfo)
-  info("$(n.name): encoding '$(name(events))'...")
+function encode(events::EventLibrary, n::NetworkInfo; log=false)
+  log && info("$(n.name): encoding '$(name(events))'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true)
   provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=n["batch_size"])
@@ -144,8 +146,8 @@ function encode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo)
 end
 
 export decode
-function decode(compact::EventLibrary, n::NetworkInfo, pulse_size)
-  info("$(n.name): decoding '$(name(compact))'...")
+function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
+  log && info("$(n.name): decoding '$(name(compact))'...")
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training

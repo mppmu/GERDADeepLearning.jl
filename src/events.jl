@@ -3,15 +3,15 @@
 using HDF5
 import Base: filter, length, getindex, haskey, copy, string, print, println, deepcopy
 import HDF5: name
+using Compat
 
 
-default_labels = [:aoeValues, :aoeClasses, :E]
-
+@compat abstract type EventCollection
+end
 
 export EventLibrary
-type EventLibrary
+type EventLibrary <: EventCollection
   waveforms::Array{Float32, 2}
-  sampling_rate::Number # in Hz
   labels::Dict{Symbol,Vector{Float32}} # same length as waveforms
   prop::Dict{Symbol,Any}
 
@@ -19,128 +19,62 @@ type EventLibrary
   EventLibrary(waveforms::Matrix{Float32}) = new(waveforms, 100e6, Dict(), Dict())
 end
 
+export DLData
+type DLData <: EventCollection
+  entries :: Vector{EventLibrary}
+
+  function DLData(entries::Vector{EventLibrary})
+    @assert length(entries) > 0
+    new(entries)
+  end
+end
+
+Base.start(data::DLData) = 1
+Base.done(data::DLData, state) = length(data.entries) == state-1
+Base.next(data::DLData, state) = data.entries[state], state+1
 
 export waveforms
-function waveforms(events::EventLibrary)
-  return events.waveforms
-end
+waveforms(events::EventLibrary) = events.waveforms
+waveforms(data::DLData) = [waveforms(e) for e in data]
 
 export sampling_rate
-function sampling_rate(lib::EventLibrary)
-  return lib.sampling_rate
-end
+sampling_rate(lib::EventLibrary) = lib[:sampling_rate]
+sampling_rate(data::DLData) = sampling_rate(data.entries[1])
 
 export sampling_period
-function sampling_period(lib::EventLibrary)
-  return 1/lib.sampling_rate
-end
+sampling_period(lib::EventLibrary) = 1/lib.sampling_rate
+sampling_period(data::DLData) = sampling_period(data.entries[1])
 
 export sample_size
-function sample_size(lib::EventLibrary)
-  return size(lib.waveforms, 1)
-end
-
-export read_sets
-function read_sets(filepath)
-  result::Dict{Symbol, EventLibrary} = Dict()
-
-  ifile = h5open(filepath, "r")
-  for setentry in ifile
-    setname = Symbol(name(setentry)[2:end])
-    setdata = read(setentry)
-
-    waveforms = setdata["waveforms"]
-    events = EventLibrary(waveforms)
-    events.labels = _str_to_sym_dict(setdata["labels"])
-    if haskey(setdata, "prop")
-      events.prop = _str_to_sym_dict(setdata["prop"])
-    else
-      events.prop = Dict()
-    end
-    result[setname] = events
-  end
-
-  return result
-end
-
-
-function _str_to_sym_dict(dict)
-  result = Dict{Symbol, Any}()
-  for (key,value) in dict
-    result[Symbol(key)] = value
-  end
-  return result
-end
-
-export read_events
-function read_events(filepath)
-  ifile = h5open(filepath, "r")
-
-  waveforms = read(ifile, "waveforms")
-
-  events = EventLibrary(waveforms)
-
-  for entry in ifile
-    data = read(entry)
-    key = name(entry)[2:end]
-    if startswith(key,"label_")
-      events.labels[Symbol(key[7:end])] = data
-    end
-    if startswith(key,"prop_")
-      events.prop[Symbol(key[6:end])] = data
-    end
-  end
-
-  close(ifile)
-  return events
-end
-
-
-export write_sets
-function write_sets(sets::Dict{Symbol,EventLibrary}, filepath::AbstractString)
-  h5open(filepath, "w") do file
-    for (setname, events) in sets
-      write(file, "$setname/waveforms", events.waveforms)
-      for (key,value) in events.labels
-        write(file, "$setname/labels/"*string(key), value)
-      end
-      for(key,value) in events.prop
-        try
-          write(file, "$setname/prop/"*string(key), value)
-        catch err
-          info("Cannot write property $key: $err")
-        end
-      end
-    end
-  end
-end
-
-export write_events
-function write_events(events::EventLibrary, filepath::AbstractString)
-  h5open(filepath, "w") do file
-    write(file, "waveforms", events.waveforms)
-    for (key,value) in events.labels
-      write(file, "label_"*string(key), value)
-    end
-    for(key,value) in events.prop
-      write(file, "prop_"*string(key), value)
-    end
-  end
-end
+sample_size(lib::EventLibrary) = size(lib.waveforms, 1)
+sample_size(data::DLData) = sample_size(data.entries[1])
 
 
 export filter
-function filter(events::EventLibrary, predicate_key=:E, predicate=e->((e>600) && (e<10000)))
+function filter(events::EventLibrary, predicate_key, predicate::Function)
   indices = find(predicate, events.labels[predicate_key])
   return events[indices]
 end
 
-function filter(sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
+# function filter(lib::EventLibrary, predicate_key::Symbol, )
+
+function filter(sets::Dict{Symbol,EventLibrary}, predicate_key, predicate::Function)
   result = Dict{Symbol,EventLibrary}()
   for (key, lib) in sets
     result[key] = filter(lib, predicate_key, predicate)
   end
   return result
+end
+
+function filter(data::DLData, predicate_key, predicate::Function)
+  if hasproperty(data, predicate_key)
+    # Filter list of datasets
+    filtered_indices = find(lib -> predicate(lib.props[predicate_key]), data.entries)
+    return DLData(data.entries[filtered_indices])
+  else
+    # Filter individual datasets
+    return DLData([filter(lib, predicate_key, predicate) for lib in data.entries])
+  end
 end
 
 export filter_by_proxy
@@ -195,6 +129,11 @@ export haskey
 function haskey(events::EventLibrary, key::Symbol)
   return haskey(events.labels, key) || haskey(events.prop, key)
 end
+
+export hasproperty
+hasproperty(events::EventLibrary, key::Symbol) = haskey(events.prop, key)
+hasproperty(data::DLData, key::Symbol) = hasproperty(data.entries[1])
+
 
 
 export copy

@@ -9,6 +9,7 @@ type DLEnv # immutable
   dir::AbstractString
   config::Dict
   _ext_event_libs::Dict{String,Dict{Symbol,EventLibrary}}
+  _verbosity::Integer # 0: nothing, 1: only errors, 2: default, 3: all
 
   DLEnv() = DLEnv("config")
   DLEnv(name::AbstractString) = DLEnv(abspath(""), name)
@@ -16,7 +17,7 @@ type DLEnv # immutable
     f = open(joinpath(dir,"$name.json"), "r")
     dicttxt = readstring(f)  # file information to string
     dict = JSON.parse(dicttxt)  # parse and transform data
-    env = new(dir, dict, Dict())
+    env = new(dir, dict, Dict(), get(dict, "verbosity", 2))
     setup(env)
     return env
   end
@@ -41,11 +42,11 @@ function new_properties!(modifier, env::DLEnv, template_name::AbstractString, ne
 end
 
 export resolvepath
-function resolvepath(env::DLEnv, path::AbstractString)
-  if isabspath(path)
-    return path
+function resolvepath(env::DLEnv, path::AbstractString...)
+  if isabspath(path[1])
+    return joinpath(path...)
   else
-    return joinpath(env.dir, path)
+    return joinpath(env.dir, path...)
   end
 end
 
@@ -53,17 +54,41 @@ function Base.joinpath(env::DLEnv, elements::String...)
   return joinpath(env.dir, elements...)
 end
 
+function Base.info(env::DLEnv, level::Integer, msg::AbstractString)
+  if env._verbosity >= level
+    info(msg)
+  end
+end
+
+export set_verbosity!
+function set_verbosity!(env::DLEnv, verbosity::Integer)
+  env._verbosity = verbosity
+end
+
+export get_verbosity
+function get_verbosity(env::DLEnv)
+  return env._verbosity
+end
+
+
+export _create_h5data
+function _create_h5data(env::DLEnv)
+  info(env, 2, "Reading original data from $(env.config["path"])")
+  setdict = _setdict(env)
+  set_names = collect(keys(setdict))
+  keylists = KeyList[]
+  for (i,keylist_path) in enumerate(env.config["keylists"])
+    if !endswith(keylist_path, ".txt")
+      keylist_path = keylist_path*".txt"
+    end
+    push!(keylists, parse_keylist(resolvepath(env, keylist_path), keylist_path))
+  end
+  raw_dir = resolvepath(env, "data", "raw")
+  isdir(raw_dir) || mkdir(raw_dir)
+  mgdo_to_hdf5(env.config["path"], raw_dir, keylists; verbosity=get_verbosity(env))
+end
 
 export getdata
-"""
-Get the data, defined by the keylists in config.json.
-The data is split into different data sets such as training and test.
-This method returns a Dict{Symbol, EventLibrary} containing the different sets.
-If the data has been loaded before, the same dictionary is returned.
-If caching is active (set in config.json), the cached data will be read if available.
-Otherwise a new cache file will be created.
-If overwrite_existing is set to true, the original data is read and optionally cached.
-"""
 function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[])
   if !preprocessed
     return _get_raw_data(env; targets=targets)
@@ -87,7 +112,7 @@ function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[]
     if cache_up_to_date
       return preprocessed
     else
-      info("Refreshing cache of 'preprocessed'.")
+      info(env, 2, "Refreshing cache of 'preprocessed'.")
       delete!(env, "preprocessed")
       return getdata(env; preprocessed=true, targets=targets)
     end
@@ -97,19 +122,23 @@ end
 function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
   data = get(env, "data"; targets=targets) do
     # Else read original data
-    info("Reading original data from $(env.config["path"])")
+    info(env, 2, "Reading original data from $(env.config["path"])")
     keylist = FileKey[]
     setdict = _setdict(env)
     set_names = collect(keys(setdict))
     set_sizes = []
     for (i,keylist_path) in enumerate(env.config["keylists"])
+      if !endswith(keylist_path, ".txt")
+        keylist_path = keylist_path*".txt"
+      end
       new_keys = parse_keylist(resolvepath(env, keylist_path))
       push!(keylist, new_keys...)
       push!(set_sizes, fill([setdict[setname][i] for setname in set_names], length(new_keys))...)
     end
     sets = read_tiers_1_4(env.config["path"], keylist,
         set_names=set_names, set_sizes=set_sizes,
-        select_channels=parse_detectors(env.config["detectors"]))
+        select_channels=parse_detectors(env.config["detectors"]),
+        log_progress=env._verbosity >= 2, log_errors=env._verbosity >= 1)
     sets = _builtin_filter(env, "test-pulses", sets, :isTP, isTP -> isTP == 0)
     sets = _builtin_filter(env, "baseline-events", sets, :isBL, isBL -> isBL == 0)
     sets = _builtin_filter(env, "unphysical-events", sets, :E, E -> (E > 0) && (E < 9999))
@@ -117,7 +146,7 @@ function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
   end
 
   if data != nothing
-    for (n, set) in data info(summary(set)) end
+    for (n, set) in data info(env, 2, summary(set)) end
   end
   return data
 end
@@ -130,7 +159,7 @@ function _builtin_filter(env::DLEnv, ftype_key::String, sets::Dict{Symbol, Event
   if ftype == "exclude"
     before = totallength(sets)
     result = filter(sets, label, exclude_prededicate)
-    info("Excluded $(before-(totallength(result))) $ftype_key of $before events.")
+    info(env, 2, "Excluded $(before-(totallength(result))) $ftype_key of $before events.")
     return result
   elseif ftype == "include"
     return sets
@@ -166,14 +195,14 @@ end
 export get
 function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[])
   if !isempty(targets) && containsall(env, targets)
-    info("Skipping retrieval of '$lib_name'.")
+    info(env, 2, "Skipping retrieval of '$lib_name'.")
     return nothing
   end
   if contains(env, lib_name)
-    info("Retrieving '$lib_name' from cache.")
+    info(env, 2, "Retrieving '$lib_name' from cache.")
     return get(env, lib_name)
   else
-    info("Computing '$lib_name'...")
+    info(env, 2, "Computing '$lib_name'...")
     data = compute()
 
     # check type
@@ -238,7 +267,7 @@ function Base.delete!(env::DLEnv, lib_name::String)
   file = _cachefile(env, lib_name)
   if isfile(file)
     rm(file)
-    info("Deleted cached $lib_name")
+    info(env, 2, "Deleted cached $lib_name")
   end
 end
 
