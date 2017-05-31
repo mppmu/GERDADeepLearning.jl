@@ -70,9 +70,21 @@ function get_verbosity(env::DLEnv)
   return env._verbosity
 end
 
+function Base.getindex(env::DLEnv, key::String)
+  return env.config[key]
+end
+
+function Base.setindex!(env::DLEnv, key::String, value)
+  env.config[key] = value
+end
+
+function Base.haskey(env::DLEnv, key::String)
+  return haskey(env.config, key)
+end
+
 
 export _create_h5data
-function _create_h5data(env::DLEnv)
+function _create_h5data(env::DLEnv, raw_dir)
   info(env, 2, "Reading original data from $(env.config["path"])")
   setdict = _setdict(env)
   set_names = collect(keys(setdict))
@@ -83,7 +95,6 @@ function _create_h5data(env::DLEnv)
     end
     push!(keylists, parse_keylist(resolvepath(env, keylist_path), keylist_path))
   end
-  raw_dir = resolvepath(env, "data", "raw")
   isdir(raw_dir) || mkdir(raw_dir)
   mgdo_to_hdf5(env.config["path"], raw_dir, keylists; verbosity=get_verbosity(env))
 end
@@ -120,51 +131,43 @@ function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[]
 end
 
 function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
-  data = get(env, "data"; targets=targets) do
-    # Else read original data
-    info(env, 2, "Reading original data from $(env.config["path"])")
-    keylist = FileKey[]
-    setdict = _setdict(env)
-    set_names = collect(keys(setdict))
-    set_sizes = []
-    for (i,keylist_path) in enumerate(env.config["keylists"])
-      if !endswith(keylist_path, ".txt")
-        keylist_path = keylist_path*".txt"
-      end
-      new_keys = parse_keylist(resolvepath(env, keylist_path))
-      push!(keylist, new_keys...)
-      push!(set_sizes, fill([setdict[setname][i] for setname in set_names], length(new_keys))...)
-    end
-    sets = read_tiers_1_4(env.config["path"], keylist,
-        set_names=set_names, set_sizes=set_sizes,
-        select_channels=parse_detectors(env.config["detectors"]),
-        log_progress=env._verbosity >= 2, log_errors=env._verbosity >= 1)
-    sets = _builtin_filter(env, "test-pulses", sets, :isTP, isTP -> isTP == 0)
-    sets = _builtin_filter(env, "baseline-events", sets, :isBL, isBL -> isBL == 0)
-    sets = _builtin_filter(env, "unphysical-events", sets, :E, E -> (E > 0) && (E < 9999))
-    return sets
+  raw_dir = resolvepath(env, "data", "raw")
+  if !isdir(raw_dir)
+    _create_h5data(raw_dir)
   end
 
-  if data != nothing
-    for (n, set) in data info(env, 2, summary(set)) end
+  files = readdir(raw_dir)
+  names = [file[1:end-3] for file in files]
+  libs = [lazy_read_library(joinpath(raw_dir, files[i]), names[i]) for i in 1:length(files)]
+  return DLData(libs)
+end
+
+
+export preprocess
+function preprocess(env::DLEnv, data::DLData)
+  select_channels=parse_detectors(env["detectors"])
+  if isa(select_channels,Vector)
+    data = filter(data, :detector_id, select_channels)
   end
+
+  data = _builtin_filter(env, "test-pulses", data, :isTP, isTP -> isTP == 0)
+  data = _builtin_filter(env, "baseline-events", data, :isBL, isBL -> isBL == 0)
+  data = _builtin_filter(env, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
   return data
 end
 
 
-
-
-function _builtin_filter(env::DLEnv, ftype_key::String, sets::Dict{Symbol, EventLibrary}, label, exclude_prededicate)
+function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exclude_prededicate)
   ftype = env.config[ftype_key]
   if ftype == "exclude"
-    before = totallength(sets)
-    result = filter(sets, label, exclude_prededicate)
-    info(env, 2, "Excluded $(before-(totallength(result))) $ftype_key of $before events.")
+    before = eventcount(data)
+    result = filter(data, label, exclude_prededicate)
+    info(env, 2, "Excluded $(before-(eventcount(result))) $ftype_key of $before events.")
     return result
   elseif ftype == "include"
-    return sets
+    return data
   elseif ftype == "only"
-    return filter(sets, label, x -> !exclude_prededicate(x))
+    return filter(data, label, x -> !exclude_prededicate(x))
   else
     throw(ArgumentError("Unknown filter keyword in configuration $ftype_key: $ftype"))
   end

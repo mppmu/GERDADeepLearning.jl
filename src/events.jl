@@ -11,12 +11,19 @@ end
 
 export EventLibrary
 type EventLibrary <: EventCollection
+  # EventLibraries can be lazily initialized.
+  # Possible initializers: load from file, filter by label
+  initialization_function::Union{Function,Void}
+
   waveforms::Array{Float32, 2}
   labels::Dict{Symbol,Vector{Float32}} # same length as waveforms
   prop::Dict{Symbol,Any}
 
+  EventLibrary(init::Function) = new(init, zeros(Float32, 0,0), Dict{Symbol,Vector{Float32}}(), Dict{Symbol,Any}())
+
   EventLibrary(waveforms::Matrix{Float64}) = EventLibrary(convert(Matrix{Float32}, waveforms))
-  EventLibrary(waveforms::Matrix{Float32}) = new(waveforms, 100e6, Dict(), Dict())
+
+  EventLibrary(waveforms::Matrix{Float32}) = new(nothing, waveforms, Dict{Symbol,Vector{Float32}}(), Dict{Symbol,Any}())
 end
 
 export DLData
@@ -24,17 +31,47 @@ type DLData <: EventCollection
   entries :: Vector{EventLibrary}
 
   function DLData(entries::Vector{EventLibrary})
-    @assert length(entries) > 0
+    for e in entries
+      @assert e != nothing
+    end
     new(entries)
   end
+end
+
+
+function _set_shallow(lib::EventLibrary, from::EventLibrary)
+  lib.initialization_function = from.initialization_function
+  lib.waveforms = from.waveforms
+  lib.labels = from.labels
+  lib.prop = from.prop
+end
+
+is_initialized(lib::EventLibrary) = lib.initialization_function == nothing
+
+export initialize
+function initialize(lib::EventLibrary)
+  if lib.initialization_function != nothing
+    lib.initialization_function(lib)
+    lib.initialization_function = nothing
+  end
+  return lib
+end
+
+function initialize(data::DLData)
+  for lib in data
+    initialize(lib)
+  end
+  return data
 end
 
 Base.start(data::DLData) = 1
 Base.done(data::DLData, state) = length(data.entries) == state-1
 Base.next(data::DLData, state) = data.entries[state], state+1
+Base.length(data::DLData) = length(data.entries)
+
 
 export waveforms
-waveforms(events::EventLibrary) = events.waveforms
+waveforms(lib::EventLibrary) = initialize(lib).waveforms
 waveforms(data::DLData) = [waveforms(e) for e in data]
 
 export sampling_rate
@@ -46,36 +83,37 @@ sampling_period(lib::EventLibrary) = 1/lib.sampling_rate
 sampling_period(data::DLData) = sampling_period(data.entries[1])
 
 export sample_size
-sample_size(lib::EventLibrary) = size(lib.waveforms, 1)
+sample_size(lib::EventLibrary) = size(initialize(lib).waveforms, 1)
 sample_size(data::DLData) = sample_size(data.entries[1])
 
 
 export filter
-function filter(events::EventLibrary, predicate_key, predicate::Function)
-  indices = find(predicate, events.labels[predicate_key])
-  return events[indices]
-end
 
-# function filter(lib::EventLibrary, predicate_key::Symbol, )
+filter(lib::EventCollection, key::Symbol, value::Union{AbstractString,Number}) = filter(lib, key, x -> x==value)
+filter{T<:Union{AbstractString,Number}}(lib::EventCollection, key::Symbol, values::Vector{T}) = filter(lib, key, x -> x in values)
 
-function filter(sets::Dict{Symbol,EventLibrary}, predicate_key, predicate::Function)
-  result = Dict{Symbol,EventLibrary}()
-  for (key, lib) in sets
-    result[key] = filter(lib, predicate_key, predicate)
+function filter(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
+  if is_initialized(lib)
+    indices = find(predicate, lib.labels[predicate_key])
+    return lib[indices]
+  else
+    result = copy(lib) # shallow copy
+    result.initialization_function = lib2 -> _set_shallow(lib2, filter(initialize(lib), predicate_key, predicate))
+    return result
   end
-  return result
 end
 
-function filter(data::DLData, predicate_key, predicate::Function)
+function filter(data::DLData, predicate_key::Symbol, predicate::Function)
   if hasproperty(data, predicate_key)
     # Filter list of datasets
-    filtered_indices = find(lib -> predicate(lib.props[predicate_key]), data.entries)
+    filtered_indices = find(lib -> predicate(lib.prop[predicate_key]), data.entries)
     return DLData(data.entries[filtered_indices])
   else
     # Filter individual datasets
-    return DLData([filter(lib, predicate_key, predicate) for lib in data.entries])
+    return DLData([filter(lib, predicate_key, predicate) for lib in data])
   end
 end
+
 
 export filter_by_proxy
 function filter_by_proxy(sets::Dict{Symbol,EventLibrary}, predicate_sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
@@ -111,28 +149,16 @@ function getindex(events::EventLibrary, selection)
   return result
 end
 
-export length
-function length(events::EventLibrary)
-  return size(events.waveforms, 2)
-end
+export eventcount
+eventcount(events::EventLibrary) = size(initialize(events).waveforms, 2)
+eventcount(data::DLData) = sum([eventcount(lib) for lib in data])
 
-export totallength
-function totallength(sets::Dict{Symbol,EventLibrary})
-  result = 0
-  for (key, events) in sets
-    result += length(events)
-  end
-  return result
-end
-
-export haskey
-function haskey(events::EventLibrary, key::Symbol)
-  return haskey(events.labels, key) || haskey(events.prop, key)
-end
+Base.haskey(events::EventLibrary, key::Symbol) = haskey(events.labels, key) || haskey(events.prop, key)
+Base.haskey(data::DLData, key::Symbol) = length(data) > 0 && haskey(data.entries[1])
 
 export hasproperty
 hasproperty(events::EventLibrary, key::Symbol) = haskey(events.prop, key)
-hasproperty(data::DLData, key::Symbol) = hasproperty(data.entries[1])
+hasproperty(data::DLData, key::Symbol) = length(data) > 0 && hasproperty(data.entries[1], key)
 
 
 
@@ -146,6 +172,10 @@ function copy(events::EventLibrary)
     result.prop[key] = value
   end
   return result
+end
+
+function copy(data::DLData)
+  return DLData([copy(lib) for lib in data])
 end
 
 export deepcopy
@@ -162,21 +192,30 @@ end
 
 
 function Base.string(events::EventLibrary)
-  return "$(name(events)) ($(length(events)) events)"
+  if is_initialized(events)
+    return "$(name(events)) ($(eventcount(events)) events)"
+  else
+    return "$(name(events)) (not yet initialized)"
+  end
 end
+Base.string(data::DLData) = "DLData ($(length(data.entries)) libraries)"
+Base.show(data::DLData) = println(string(data))
 
-function Base.summary(events::EventLibrary)
-  return "$(name(events)) ($(length(events)) events)"
-end
+Base.summary(events::EventCollection) = string(events)
 
 export name
-function name(events::EventLibrary)
-  return haskey(events, :name) ? events[:name] : "<unnamed>"
-end
+name(events::EventLibrary) = haskey(events, :name) ? events[:name] : "<unnamed>"
+name(data::DLData) = [name(lib) for lib in data]
 
 export setname!
 function setname!(events::EventLibrary, name::String)
   events.prop[:name] = name
+end
+
+function setname!(data::DLData, names::Vector{String})
+  for i in 1:length(data.entries)
+    setname!(data.entries[i], names[i])
+  end
 end
 
 # export convert
@@ -214,7 +253,7 @@ end
 
 export label_energy_peaks
 function label_energy_peaks(events::EventLibrary, label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)
-  labels = [_get_label(events[:E][i], peaks0, peaks1, half_window) for i in 1:length(events)]
+  labels = [_get_label(events[:E][i], peaks0, peaks1, half_window) for i in 1:eventcount(events)]
   events.labels[label_key] = labels
   return events
 end
@@ -254,6 +293,6 @@ end
 
 export put_label!
 function put_label!(events::EventLibrary, label_name::Symbol, data::Vector{Float32})
-  @assert length(data) == length(events)
+  @assert length(data) == eventcount(events)
   events.labels[label_name] = data
 end

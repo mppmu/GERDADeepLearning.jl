@@ -43,61 +43,54 @@ function create_extendible_hdf5_files(output_dir, keylists, detector_names, samp
   return h5files, label_arrays
 end
 
-
-
-export read_sets
-function read_sets(filepath)
-  result::Dict{Symbol, EventLibrary} = Dict()
-
-  ifile = h5open(filepath, "r")
-  for setentry in ifile
-    setname = Symbol(name(setentry)[2:end])
-    setdata = read(setentry)
-
-    waveforms = setdata["waveforms"]
-    events = EventLibrary(waveforms)
-    events.labels = _str_to_sym_dict(setdata["labels"])
-    if haskey(setdata, "prop")
-      events.prop = _str_to_sym_dict(setdata["prop"])
-    else
-      events.prop = Dict()
-    end
-    result[setname] = events
-  end
-
-  return result
+type EventFormatException <: Exception
+  msg::String
 end
 
 
-function _str_to_sym_dict(dict)
-  result = Dict{Symbol, Any}()
-  for (key,value) in dict
-    result[Symbol(key)] = value
+
+function lazy_read_library(h5_filepath, libname)
+  init = lib -> _initialize_from_file(lib, h5_filepath, libname)
+  lib =  EventLibrary(init)
+
+  ifile = h5open(h5_filepath, "r")
+  libroot = ifile[libname]
+
+  if read(attrs(libroot)["type"]) != "EventLibrary"
+    throw(EventFormatException("Not a valid EventLibrary: $(read(attrs(libroot)["type"]))"))
   end
-  return result
+  if read(attrs(libroot)["version"]) != "1.0"
+    throw(EventFormatException("Unknown EventLibrary version: $(read(attrs(libroot)["version"]))"))
+  end
+
+  # Read properties
+  props = libroot["properties"]
+  for key in names(attrs(props))
+    value = read(attrs(props)[key])
+    lib.prop[Symbol(key)] = value
+  end
+  # TODO keylists
+
+  close(ifile)
+
+  return lib
 end
 
-export read_events
-function read_events(filepath)
-  ifile = h5open(filepath, "r")
+function _initialize_from_file(lib::EventLibrary, h5_filepath, libname)
+  ifile = h5open(h5_filepath, "r")
+  libroot = ifile[libname]
 
-  waveforms = read(ifile, "waveforms")
+  # Read waveforms
+  lib.waveforms = read(libroot["waveforms"])
 
-  events = EventLibrary(waveforms)
-
-  for entry in ifile
-    data = read(entry)
-    key = name(entry)[2:end]
-    if startswith(key,"label_")
-      events.labels[Symbol(key[7:end])] = data
-    end
-    if startswith(key,"prop_")
-      events.prop[Symbol(key[6:end])] = data
-    end
+  # Read labels
+  labels = libroot["labels"]
+  for key in names(labels)
+    data = read(labels[key])
+    lib.labels[Symbol(key)] = data
   end
 
   close(ifile)
-  return events
 end
 
 
@@ -120,15 +113,12 @@ function write_sets(sets::Dict{Symbol,EventLibrary}, filepath::AbstractString)
   end
 end
 
-export write_events
-function write_events(events::EventLibrary, filepath::AbstractString)
-  h5open(filepath, "w") do file
-    write(file, "waveforms", events.waveforms)
-    for (key,value) in events.labels
-      write(file, "label_"*string(key), value)
-    end
-    for(key,value) in events.prop
-      write(file, "prop_"*string(key), value)
-    end
+
+
+function _str_to_sym_dict(dict)
+  result = Dict{Symbol, Any}()
+  for (key,value) in dict
+    result[Symbol(key)] = value
   end
+  return result
 end

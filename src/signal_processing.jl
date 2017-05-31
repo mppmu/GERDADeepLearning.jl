@@ -3,30 +3,30 @@
 using DSP
 
 
-export preprocess
-function preprocess(env::DLEnv, sets::Dict{Symbol,EventLibrary}; steps_name="preprocessing", copyf=deepcopy)
+export preprocess_transform
+function preprocess_transform(env::DLEnv, data::DLData; steps_name="preprocessing", copyf=deepcopy)
   steps = convert(Array{String}, env.config[steps_name])
-  result = copyf(sets)
-  for (key, events) in result
-    setname!(events, name(events)*"_preprocessed")
-    put_label!(events, :FailedPreprocessing, zeros(Float32, length(events)))
-    events.prop[:preprocessing] = steps
+  result = copyf(data)
+  setname!(result, name(data).*"_preprocessed")
+  for lib in result
+    put_label!(lib, :FailedPreprocessing, zeros(Float32, eventcount(lib)))
+    lib.prop[:preprocessing] = steps
   end
 
   # perform the steps
   for (i,step) in enumerate(steps)
-    info(env, 2, "Preprocesing $step.")
+    info(env, 2, "Preprocesing $step...")
     pfunction = eval(parse(step))
-    for (key, events) in result
-      info(env, 3, "Preprocesing $step: $key.")
-      result[key] = pfunction(events)
+    for (i,lib) in enumerate(result)
+      info(env, 3, "Preprocesing $step: $(name(lib)).")
+      result.entries[i] = pfunction(lib)
     end
   end
 
-  for (key, events) in result
-    failed_count = length(find(f -> f != 0, events[:FailedPreprocessing]))
+  for lib in result
+    failed_count = length(find(f -> f != 0, lib[:FailedPreprocessing]))
     if failed_count > 0
-      info(env, 1, "Preprocesing failed for $failed_count events in $key. These have been tagged with the label :FailedPreprocessing = 1")
+      info(env, 1, "Preprocesing failed for $failed_count events in $(name(lib)). These have been tagged with the label :FailedPreprocessing = 1")
     end
   end
 
@@ -93,9 +93,9 @@ function baseline(events::EventLibrary)
   bl_size = Int64(round(sample_size(events) / 5))
   weights = hamming(bl_size)
   weights /= sum(weights)
-  for i in 1:length(events)
+  for i in 1:eventcount(events)
     bl_level = dot(events.waveforms[1:bl_size, i], weights)
-    events.waveforms[:, i] = events.waveforms[:, i] - bl_level
+    events.waveforms[:, i] -= bl_level
   end
   return events
 end
@@ -111,9 +111,9 @@ function align_peaks(events::EventLibrary; target_length=256)
 
   s = sample_size(events)
   half = Int64(target_length/2)
-  rwf = zeros(Float32, target_length, length(events))
+  rwf = zeros(Float32, target_length, eventcount(events))
 
-  for i in 1:length(events)
+  for i in 1:eventcount(events)
     max_index = findmax(currents.waveforms[:,i])[2]
     if (max_index < half) || (max_index > s - half)
       events[:FailedPreprocessing][i] = 1
@@ -133,9 +133,9 @@ function align_midpoints(events::EventLibrary; center_y=0.5, target_length=256)
 
   s = sample_size(events)
   half = Int64(target_length/2)
-  rwf = zeros(Float32, target_length, length(events))
+  rwf = zeros(Float32, target_length, eventcount(events))
 
-  for i in 1:length(events)
+  for i in 1:eventcount(events)
     index = findmin(abs(charges.waveforms[:,i] - center_y))[2]
     if (index < half) || (index > s - half)
       events[:FailedPreprocessing][i] = 1
@@ -157,7 +157,7 @@ function normalize_energy(events::EventLibrary; value=1)
   weights = hamming(top_size)
   weights /= sum(weights)
 
-  for i in 1:length(events)
+  for i in 1:eventcount(events)
     top_level = dot(charges.waveforms[(end-top_size+1) : end, i], weights)
     events.waveforms[:,i] *= value / top_level
   end
@@ -166,7 +166,7 @@ end
 
 export integrate
 function integrate(events::EventLibrary)
-  for i in 1:length(events)
+  for i in 1:eventcount(events)
     events.waveforms[:,i] = integrate_array(events.waveforms[:,i])
   end
   if events[:waveform_type] == "charge"

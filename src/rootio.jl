@@ -13,7 +13,7 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
   try
     file_count = length(merge(keylists...))
     total_file_i = 0
-    for keylist in keylists
+    for (keylist_id, keylist) in enumerate(keylists)
       for (file_i,filekey) in enumerate(keylist.entries)
         total_file_i += 1
         file1 = path(base_path, filekey, :tier1)
@@ -29,7 +29,7 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
           results = ThreadLocal{Any}()
           # Run every thread over part of the data
           @everythread begin
-            thread_result = read_single_thread_single_file(phase2_detectors, file1, file4, label_keys, verbosity, sample_size)
+            thread_result = read_single_thread_single_file(phase2_detectors, file1, file4, label_keys, verbosity, sample_size, keylist_id)
             results[] = thread_result
           end
 
@@ -41,16 +41,14 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
     end
   catch exc
     for h5file in h5files close(h5file) end
-    throw(exc)
+    rethrow(exc)
   end
-
 
   for h5file in h5files close(h5file) end
 end
 
 
-function read_single_thread_single_file(detector_names, file1, file4, label_keys,
-verbosity, sample_size)
+function read_single_thread_single_file(detector_names, file1, file4, label_keys, verbosity, sample_size, keylist_id)
   # Create thread-local arrays
   tier4_bindings = TTreeBindings()
   branch_energies = tier4_bindings[:energy] = zeros(Float64, 0)
@@ -63,7 +61,7 @@ verbosity, sample_size)
   branch_isBL = tier4_bindings[:isBL] = Ref(zero(Int32))
 
   # Prepare tables
-  result, owner, E, AoE, AoE_class, isTP, isBL = create_label_arrays(label_keys, length(detector_names))
+  result, keylist, E, AoE, AoE_class, isTP, isBL = create_label_arrays(label_keys, length(detector_names))
   waveforms = [Vector{Float32}[] for i in 1:length(detector_names)]
   result[:waveforms] = waveforms
 
@@ -84,6 +82,7 @@ verbosity, sample_size)
           detector = detector_i + 1
           push!(waveforms[detector], convert(Array{Float32}, t1_evt.aux_waveforms.samples[no_in_event]))
 
+          push!(keylist[detector], keylist_id)
           push!(E[detector], branch_energies[detector])
           push!(AoE[detector], branch_aoeVal[detector])
           if branch_aoeEval[detector]
@@ -91,8 +90,8 @@ verbosity, sample_size)
           else
               push!(AoE_class[detector], -1)
           end
-          push!(isBL[detector], branch_isBL.x)
           push!(isTP[detector], branch_isTP.x)
+          push!(isBL[detector], branch_isBL.x)
         end # for
       end # for
     end # open
