@@ -68,51 +68,61 @@ function calculate_parameters(model, filepath)
  end
 
 
-function exists_device(ctx::mx.Context)
- try
-   mx.ones(Float32, (1,1), ctx)
-   return true
- catch err
-   return false
- end
-end
-
- best_device_cache = nothing
-
- function best_device()
-   global best_device_cache
-   if best_device_cache == nothing
-     gpus = list_xpus(mx.gpu)
-     if length(gpus) > 0
-       best_device_cache = gpus
-       info("$(length(gpus)) GPUs found.")
-     else
-       best_device_cache = mx.cpu()
-       info("No GPUs available, fallback to single CPU.")
-     end
+ function to_context(gpus::Vector{Int})
+   if length(gpus) == 0
+     return mx.cpu()
+   else
+     return [mx.gpu(i) for i in gpus]
    end
-   return best_device_cache
  end
 
-export use_gpu
-function use_gpu(id)
-  global best_device_cache
-  if exists_device(mx.gpu(id))
-    best_device_cache = mx.gpu(id)
-  else
-    info("Could not access GPU $id, fallback to CPU")
-    best_device_cache = mx.cpu()
-  end
-end
-
-export list_xpus
-function list_xpus(xpu=mx.gpu)
-  result = mx.Context[]
-  while exists_device(xpu(length(result))) && length(result) < 8
-    push!(result, xpu(length(result)))
-  end
-  return result
-end
+# function exists_device(ctx::mx.Context)
+#  try
+#    mx.ones(Float32, (1,1), ctx)
+#    return true
+#  catch err
+#    return false
+#  end
+# end
+#
+#
+#  best_device_cache = nothing
+#
+# export best_device
+#  function best_device()
+#    global best_device_cache
+#    if best_device_cache == nothing
+#      gpus = list_xpus(mx.gpu)
+#      if length(gpus) > 0
+#        best_device_cache = gpus
+#        info("$(length(gpus)) GPUs found.")
+#      else
+#        best_device_cache = mx.cpu()
+#        info("No GPUs available, fallback to single CPU.")
+#      end
+#    end
+#    return best_device_cache
+#  end
+#
+# export use_gpu
+# function use_gpu(id)
+#   global best_device_cache
+#   if exists_device(mx.gpu(id))
+#     best_device_cache = mx.gpu(id)
+#   else
+#     info("Could not access GPU $id, fallback to CPU")
+#     best_device_cache = mx.cpu()
+#   end
+# end
+#
+# export list_xpus
+# function list_xpus(xpu=mx.gpu)
+#   result = mx.Context[]
+#   while exists_device(xpu(length(result))) && length(result) < 8
+#     push!(result, xpu(length(result)))
+#   end
+#   return result
+# end
 
 
 
@@ -120,13 +130,14 @@ end
    name::String
    dir::AbstractString
    config::Dict
+   context
    model
    epoch::Integer # the current state of the model, initialized to 0.
    training_curve::Vector{Float64} # MSE, created during training
    xval_curve::Vector{Float64} # MSE, created on demand
 
-   NetworkInfo(name::String, dir::AbstractString, config::Dict) =
-      new(name, dir, config, nothing, 0, Float64[], Float64[])
+   NetworkInfo(name::String, dir::AbstractString, config::Dict, context) =
+      new(name, dir, config, context, nothing, 0, Float64[], Float64[])
  end
 
 export getindex
@@ -170,8 +181,8 @@ end
 
 
 function train(n::NetworkInfo,
-      train_provider, eval_provider,
-      xpu; verbosity=2)
+      train_provider, eval_provider;
+      verbosity=2)
   learning_rate = n["learning_rate"]
   epochs = n["epochs"]
 
@@ -181,7 +192,7 @@ function train(n::NetworkInfo,
   metric = mx.MSE()
 
   optimizer = mx.ADAM(lr=learning_rate)
-  verbosity >= 2 && info("Starting training on $xpu (from $(n.epoch+1) to $epochs)... ")
+  verbosity >= 2 && info("Starting training on $(n.context) (from $(n.epoch+1) to $epochs)... ")
 
   # if !isdefined(n.model, :arg_params)
   #   mx.init_model(n.model, mx.UniformInitializer(0.01); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
@@ -216,9 +227,10 @@ function train(n::NetworkInfo,
 end
 
 
+export build
 function build(n::NetworkInfo, method::Symbol,
     train_provider, eval_provider, build_function;
-    xpu=best_device(), verbosity=2
+    verbosity=2
   )
   target_epoch = n["epochs"]
   slim = n["slim"]
@@ -233,14 +245,14 @@ function build(n::NetworkInfo, method::Symbol,
 
   if method == :train
     loss, net = build_function(n.config, size(train_provider.data_arrays[1],1))
-    n.model = mx.FeedForward(loss, context=xpu)
-    train(n, train_provider, eval_provider, xpu; verbosity=verbosity)
+    n.model = mx.FeedForward(loss, context=n.context)
+    train(n, train_provider, eval_provider; verbosity=verbosity)
     load_network(n, target_epoch)
   elseif method == :load
     load_network(n, target_epoch)
   elseif method == :refine
     load_network(n, -1; pick_best=false)
-    train(n, train_provider, eval_provider, xpu; verbosity=verbosity)
+    train(n, train_provider, eval_provider; verbosity=verbosity)
     load_network(n, target_epoch)
   else
     throw(ArgumentError("method must be train, load or refine. got $method"))
@@ -275,7 +287,7 @@ end
 
 function eval(model, provider::mx.ArrayDataProvider, metric::mx.AbstractEvalMetric)
   prediction = mx.predict(model, provider)
-  data = provider.data_arrays[1]
+  data = provider.label_arrays[1]
   mx.reset!(metric)
 
   data_nd = mx.NDArray(data)
@@ -309,15 +321,15 @@ end
 
  function load_network_checkpoint(n::NetworkInfo, epoch; output_name="softmax", delete_unneeded_arguments=true)
    sym, arg_params, aux_params = mx.load_checkpoint(joinpath(n.dir, n.name), epoch)
-   n.model = subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments)
+   n.model = subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments, n.context)
    n.epoch = epoch
  end
 
- function subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments; xpu=best_device())
+ function subnetwork(sym, arg_params, aux_params, output_name, delete_unneeded_arguments, context)
    all_layers = mx.get_internals(sym)
    loss = all_layers[output_name*"_output"]
 
-   model = mx.FeedForward(loss, context=xpu)
+   model = mx.FeedForward(loss, context=context)
    model.arg_params = copy(arg_params)
    model.aux_params = copy(aux_params)
 

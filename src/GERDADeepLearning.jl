@@ -4,13 +4,14 @@
 
 module GERDADeepLearning
 
-include("gdl_util.jl")
 include("gerda_files.jl")
 
 include("events.jl")
 include("hdf5io.jl")
 include("rootio.jl")
 include("dl_env.jl")
+
+include("gdl_util.jl")
 
 include("signal_processing.jl")
 

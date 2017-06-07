@@ -2,13 +2,14 @@
 
 using JSON
 
-import Base: get, contains, push!
+import Base: get, contains
 
 export DLEnv
 type DLEnv # immutable
   dir::AbstractString
   config::Dict
-  _ext_event_libs::Dict{String,Dict{Symbol,EventLibrary}}
+  _gpus::Vector{Int}
+  _ext_event_libs::Dict{String,DLData}
   _verbosity::Integer # 0: nothing, 1: only errors, 2: default, 3: all
 
   DLEnv() = DLEnv("config")
@@ -17,11 +18,13 @@ type DLEnv # immutable
     f = open(joinpath(dir,"$name.json"), "r")
     dicttxt = readstring(f)  # file information to string
     dict = JSON.parse(dicttxt)  # parse and transform data
-    env = new(dir, dict, Dict(), get(dict, "verbosity", 2))
+    env = new(dir, dict, Int[], Dict(), get(dict, "verbosity", 2))
     setup(env)
     return env
   end
 end
+
+type ConfigurationException <: Exception end
 
 export get_properties
 function get_properties(env::DLEnv, name::AbstractString)
@@ -86,8 +89,6 @@ end
 export _create_h5data
 function _create_h5data(env::DLEnv, raw_dir)
   info(env, 2, "Reading original data from $(env.config["path"])")
-  setdict = _setdict(env)
-  set_names = collect(keys(setdict))
   keylists = KeyList[]
   for (i,keylist_path) in enumerate(env.config["keylists"])
     if !endswith(keylist_path, ".txt")
@@ -102,7 +103,9 @@ end
 export getdata
 function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[])
   if !preprocessed
-    return _get_raw_data(env; targets=targets)
+    return get(env, "raw"; targets=targets) do
+      _get_raw_data(env; targets=targets)
+    end
   else
     data = _get_raw_data(env; targets=["preprocessed"])
     preprocessed = get(env, "preprocessed"; targets=targets) do
@@ -114,8 +117,8 @@ function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[]
     # Else check whether cache is up to date
     steps = env.config["preprocessing"]
     cache_up_to_date = true
-    for (key,events) in preprocessed
-      cached_steps = events[:preprocessing]
+    for lib in preprocessed
+      cached_steps = lib[:preprocessing]
       if cached_steps != steps
         cache_up_to_date = false
       end
@@ -135,29 +138,31 @@ function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
   if !isdir(raw_dir)
     _create_h5data(raw_dir)
   end
-
-  files = readdir(raw_dir)
-  names = [file[1:end-3] for file in files]
-  libs = [lazy_read_library(joinpath(raw_dir, files[i]), names[i]) for i in 1:length(files)]
-  return DLData(libs)
+  return lazy_read_all(raw_dir)
 end
 
 
 export preprocess
 function preprocess(env::DLEnv, data::DLData)
   select_channels=parse_detectors(env["detectors"])
-  if isa(select_channels,Vector)
+  if isa(select_channels,Vector) && length(select_channels) > 0
     data = filter(data, :detector_id, select_channels)
   end
 
   data = _builtin_filter(env, "test-pulses", data, :isTP, isTP -> isTP == 0)
   data = _builtin_filter(env, "baseline-events", data, :isBL, isBL -> isBL == 0)
   data = _builtin_filter(env, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
+
+  data = preprocess_transform(env, data)
+
+  data = split(env, data)
+
   return data
 end
 
 
 function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exclude_prededicate)
+  # TODO per detector to save memory
   ftype = env.config[ftype_key]
   if ftype == "exclude"
     before = eventcount(data)
@@ -174,26 +179,35 @@ function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exc
 end
 
 
-function _setdict(env::DLEnv)
-  result = Dict{Symbol,Any}()
+function parse_datasets(env::DLEnv)
+  result = Dict{AbstractString,Vector{AbstractFloat}}()
   strdict = get_properties(env, "sets")
+  requiredlength = length(env["keylists"])
   for (key,value) in strdict
-    result[Symbol(key)] = value
+    if isa(value, Vector)
+      @assert length(value) == requiredlength
+      result[key] = value
+    elseif isa(value, AbstractFloat)
+      result[key] = fill(value, requiredlength)
+    else
+      throw(ConfigurationException())
+    end
   end
   return result
 end
 
-export setup
+function Base.split(env::DLEnv, data::DLData)
+  datasets = parse_datasets(env)
+  return split(data, datasets)
+end
+
 function setup(env::DLEnv)
   e_mkdir(env.dir)
   e_mkdir(joinpath(env.dir, "data"))
   e_mkdir(joinpath(env.dir, "models"))
   e_mkdir(joinpath(env.dir, "plots"))
 end
-
-function e_mkdir(dir)
-  !isdir(dir) && mkdir(dir)
-end
+e_mkdir(dir) = !isdir(dir) && mkdir(dir)
 
 export get
 function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[])
@@ -209,8 +223,8 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
     data = compute()
 
     # check type
-    if !isa(data, Dict)
-      throw(TypeError(Symbol(compute), "get_or_compute", Dict{Symbol,EventLibrary}, data))
+    if !isa(data, DLData)
+      throw(TypeError(Symbol(compute), "get_or_compute", DLData, data))
     end
 
     push!(env, lib_name, data)
@@ -223,24 +237,20 @@ function get(env::DLEnv, lib_name::String)
   return env._ext_event_libs[lib_name]
 end
 
-export push!
-function push!(env::DLEnv, lib_name::String, libs::Dict{Symbol,EventLibrary})
+function Base.push!(env::DLEnv, lib_name::String, data::DLData)
   _ensure_ext_loaded(env, lib_name)
-  dict = env._ext_event_libs[lib_name]
-  for (key, val) in libs
-    dict[key] = val
-  end
+  env._ext_event_libs[lib_name] = data
   if env.config["cache"]
-    write_sets(dict, joinpath(env.dir, "data", lib_name*".h5"))
+    write_all(data, joinpath(env.dir, "data", lib_name))
   end
 end
 
 export contains
 function contains(env::DLEnv, lib_name::String)
-  if haskey(env._ext_event_libs, lib_name) && !isempty(env._ext_event_libs[lib_name])
+  if haskey(env._ext_event_libs, lib_name)
     return true
   end
-  return env.config["cache"] && isfile(_cachefile(env, lib_name))
+  return env.config["cache"] && isdir(_cachedir(env, lib_name))
 end
 
 export containsall
@@ -253,11 +263,9 @@ end
 
 function _ensure_ext_loaded(env::DLEnv, lib_name::String)
   if !haskey(env._ext_event_libs, lib_name)
-    c_file = _cachefile(env, lib_name)
-    if isfile(c_file)
-      env._ext_event_libs[lib_name] = read_sets(c_file)
-    else
-      env._ext_event_libs[lib_name] = Dict()
+    c_dir = _cachedir(env, lib_name)
+    if isdir(c_dir)
+      env._ext_event_libs[lib_name] = lazy_read_all(c_dir)
     end
   end
 end
@@ -266,21 +274,26 @@ function Base.delete!(env::DLEnv, lib_name::String)
   if haskey(env._ext_event_libs, lib_name)
     delete!(env._ext_event_libs, lib_name)
   end
-  # Delete cache file (even if cache is set to false)
-  file = _cachefile(env, lib_name)
-  if isfile(file)
-    rm(file)
+  # Delete cached files (even if cache is set to false)
+  c_dir = _cachedir(env, lib_name)
+  if isdir(c_dir)
+    rm(c_dir; recursive=true)
     info(env, 2, "Deleted cached $lib_name")
   end
 end
 
-function _cachefile(env::DLEnv, lib_name::String)
-  return joinpath(env.dir, "data", lib_name*".h5")
+function _cachedir(env::DLEnv, lib_name::String)
+  return joinpath(env.dir, "data", lib_name)
 end
 
 
 function network(env::DLEnv, name::String)
     dir = joinpath(env.dir, "models", name)
     isdir(dir) || mkdir(dir)
-    return NetworkInfo(name, dir, get_properties(env, name))
+    return NetworkInfo(name, dir, get_properties(env, name), to_context(env._gpus))
+end
+
+export use_gpus
+function use_gpus(env, gpus::Int...)
+  env._gpus = [gpus...]
 end

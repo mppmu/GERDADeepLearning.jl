@@ -16,7 +16,7 @@ function _build_conv_autoencoder(properties, input_size)
   fc_layers = properties["fc"]
   dropout = properties["dropout"]
 
-  last_conv_data_length = Int(input_size / prod(pool_sizes))
+  # last_conv_data_length = Int(input_size / prod(pool_sizes))
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label)
@@ -47,7 +47,7 @@ function _build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties,
   filter_counts = properties["conv_filters"]
   filter_lengths = properties["conv_lengths"]
   assert(length(filter_counts) == length(filter_lengths))
-  pool_sizes = properties["pool_size"]
+  pool_sizes = convert(Vector{Int64}, properties["pool_size"])
   pool_type = properties["pool_type"]
   act_type = properties["activation"]
   conv_dropout = properties["conv_dropout"]
@@ -59,16 +59,22 @@ function _build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties,
   for i in (length(fc_layers)-1):-1:1
     X = fc_layer("dec_fc_$i", X, fc_layers[i], act_type, dropout)
   end
-  X = fc_layer("blow_up", X, filter_counts[end] * last_conv_data_length, act_type, conv_dropout)
+  if length(filter_counts) > 0
+    X = fc_layer("blow_up", X, filter_counts[end] * last_conv_data_length, act_type, conv_dropout)
+    X = mx.Reshape(X, shape=(1, last_conv_data_length, Int(filter_counts[end]), 0), name=:reshape_for_deconv)
+  else
+    X = fc_layer("blow_up", X, full_size, act_type, conv_dropout)
+  end
 
   # Deconvolutions
-  X = mx.Reshape(X, shape=(1, last_conv_data_length, Int(filter_counts[end]), 0), name=:reshape_for_deconv)
   for i in length(filter_counts):-1:2
     X = deconv_layer("deconv_$i", X, filter_counts[i-1], filter_lengths[i], act_type, pool_sizes[i], conv_dropout)
   end
-  X = deconv_layer("deconv_1", X, 1, filter_lengths[1], nothing, pool_sizes[1], 0)
-  # output should have shape (features, batch_size)
-  X = mx.Flatten(X, name=:out) # (batch_size, width, height=1)
+  if length(filter_counts) > 0
+    X = deconv_layer("deconv_1", X, 1, filter_lengths[1], nothing, pool_sizes[1], 0)
+    # output should have shape (features, batch_size)
+    X = mx.Flatten(X, name=:out) # (batch_size, width, height=1)
+  end
     # X = mx.FullyConnected(X, num_hidden=input_size, name=:out)
   loss = mx.LinearRegressionOutput(X, Y, name=:softmax)
   return loss, X
@@ -86,26 +92,25 @@ function autoencoder(env::DLEnv,
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => training_data.waveforms,
-      :label => training_data.waveforms, batch_size=n["batch_size"])
-  eval_provider = mx.ArrayDataProvider(:data => eval_data.waveforms,
-      :label => eval_data.waveforms, batch_size=n["batch_size"])
+  train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
+      :label => waveforms(training_data), batch_size=n["batch_size"])
+  eval_provider = mx.ArrayDataProvider(:data => waveforms(eval_data),
+      :label => waveforms(eval_data), batch_size=n["batch_size"])
 
-  build(n, action, train_provider, eval_provider, _build_conv_autoencoder;
-  verbosity=get_verbosity(env))
+  build(n, action, train_provider, eval_provider, _build_conv_autoencoder; verbosity=get_verbosity(env))
   return n
 end
 
-function autoencoder(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
+function autoencoder(env::DLEnv, data::DLData;
   id="autoencoder", action::Symbol=:auto,
-  train_key=:train, xval_key=:xval)
-  return autoencoder(env, data_sets[train_key], data_sets[xval_key]; id=id, action=action)
+  train_key="train", xval_key="xval")
+  return autoencoder(env, flatten(filter(data, :set, train_key)), flatten(filter(data, :set, xval_key)); id=id, action=action)
 end
 
 
 export decoder
-function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
-  target_datasets::Dict{Symbol, EventLibrary}; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
+function decoder(env::DLEnv, latent_data::DLData,
+  target_data::DLData; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
 
   if action == :auto
     action = decide_best_action(network(env,id))
@@ -114,12 +119,12 @@ function decoder(env::DLEnv, latent_datasets::Dict{Symbol, EventLibrary},
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => latent_datasets[train_key].waveforms,
-      :label => target_datasets[train_key].waveforms, batch_size=n["batch_size"])
-  eval_provider = mx.ArrayDataProvider(:data => latent_datasets[xval_key].waveforms,
-      :label => target_datasets[xval_key].waveforms, batch_size=n["batch_size"])
+  train_provider = mx.ArrayDataProvider(:data => waveforms(filter(latent_data, :set, train_key)),
+      :label => waveforms(filter(target_data, :set, train_key)), batch_size=n["batch_size"])
+  eval_provider = mx.ArrayDataProvider(:data => waveforms(filter(latent_data, :set, xval_key)),
+      :label => waveforms(filter(target_data, :set, xval_key)), batch_size=n["batch_size"])
 
-  full_size = size(target_datasets[train_key].waveforms, 1)
+  full_size = sample_size(target_data)
   build(n, action, train_provider, eval_provider, (p, s) -> _build_conv_decoder(full_size, p, s);
   verbosity=get_verbosity(env))
   return n
@@ -141,8 +146,8 @@ function encode(events::EventLibrary, n::NetworkInfo; log=false)
   return result
 end
 
-function encode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo)
-  mapvalues(sets, encode, n)
+function encode(data::DLData, n::NetworkInfo)
+  mapvalues(data, encode, n)
 end
 
 export decode
@@ -169,8 +174,8 @@ function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
   return result
 end
 
-function decode(sets::Dict{Symbol,EventLibrary}, n::NetworkInfo, pulse_size)
-  mapvalues(sets, decode, n, pulse_size)
+function decode(data::DLData, n::NetworkInfo, pulse_size)
+  mapvalues(data, decode, n, pulse_size)
 end
 
 export mse
@@ -181,8 +186,8 @@ function mse(events::EventLibrary, n::NetworkInfo)
   return mse_result[1][2]
 end
 
-function mse(libs::Dict{Symbol,EventLibrary}, n::NetworkInfo)
-  mapvalues(libs, mse, n)
+function mse(data::DLData, n::NetworkInfo)
+  mapvalues(data, mse, n)
 end
 
 export encode_decode
@@ -198,6 +203,6 @@ function encode_decode(events::EventLibrary, n::NetworkInfo)
   return result
 end
 
-function encode_decode(libs::Dict{Symbol,EventLibrary}, n::NetworkInfo)
-  mapvalues(libs, encode_decode, n)
+function encode_decode(data::DLData, n::NetworkInfo)
+  mapvalues(data, encode_decode, n)
 end

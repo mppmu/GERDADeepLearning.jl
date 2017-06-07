@@ -17,26 +17,27 @@ function _build_dnn_classifier(properties, input_size)
   for i in 1:length(fc_sizes)
     X = fc_layer("fc_$i", X, fc_sizes[i], act_type, dropout)
   end
-  X = mx.FullyConnected(data=X, num_hidden=1, name=:out)
+  X = mx.FullyConnected(X, num_hidden=1, name=:out)
 
   # Available outputs: SoftmaxOutput, LinearRegressionOutput, LogisticRegressionOutput, MAERegressionOutput, SVMOutput
-  loss = mx.LogisticRegressionOutput(data=X, label=Y, name=:softmax)
+  loss = mx.LogisticRegressionOutput(X, Y, name=:softmax)
   return loss, X
 end
 
 
 
 export dnn_classifier
-function dnn_classifier(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
+function dnn_classifier(env::DLEnv, data::DLData;
   id="dnn-classifier", action::Symbol=:auto, label_key=:SSE,
-  train_key=:train, xval_key=:xval, evaluate=[:test])
+  train_key="train", xval_key="xval", evaluate=["test"])
+
   if action == :auto
     action = decide_best_action(network(env,id))
     println("$id: auto-selected action is $action")
   end
 
-  training_data = data_sets[train_key]
-  xval_data = data_sets[xval_key]
+  training_data = flatten(data[:set=>train_key])
+  xval_data = flatten(data[:set=>xval_key])
 
   # Preprocessing
   if !haskey(training_data, label_key)
@@ -47,16 +48,17 @@ function dnn_classifier(env::DLEnv, data_sets::Dict{Symbol, EventLibrary};
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => training_data.waveforms,
+  train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
       :label => training_data[label_key], batch_size=n["batch_size"])
-  xval_provider = mx.ArrayDataProvider(:data => xval_data.waveforms,
+  xval_provider = mx.ArrayDataProvider(:data => waveforms(xval_data),
       :label => xval_data[label_key], batch_size=n["batch_size"])
 
   build(n, action, train_provider, xval_provider, _build_dnn_classifier)
 
   for eval_set_name in evaluate
-    eval_set = data_sets[eval_set_name]
-    predict(env, eval_set, n)
+    for lib in data[:set=>eval_set_name]
+      predict(lib, n)
+    end
   end
 
   return n
@@ -64,7 +66,7 @@ end
 
 export predict
 function predict(data::EventLibrary, n::NetworkInfo; psd_name=:psd)
-  provider = mx.ArrayDataProvider(:data => data.waveforms, batch_size=n["batch_size"])
+  provider = mx.ArrayDataProvider(:data => waveforms(data), batch_size=n["batch_size"])
   predictions = mx.predict(n.model, provider)
   data.labels[psd_name] = predictions[1,:]
   push_classifier!(data, "Neural Network")

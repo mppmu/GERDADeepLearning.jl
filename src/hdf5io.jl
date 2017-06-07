@@ -2,16 +2,25 @@
 
 using HDF5
 
+type EventFormatException <: Exception
+  msg::String
+end
+
+
+function create_libroot(h5file, libname)
+  libroot = g_create(h5file, libname)
+  attrs(libroot)["type"] = "EventLibrary"
+  attrs(libroot)["version"] = "1.0"
+  return libroot
+end
+
 function create_extendible_hdf5_files(output_dir, keylists, detector_names, sample_size, chunk_size, label_keys)
   h5files = [h5open(joinpath(output_dir, "$dname.h5"), "w") for dname in detector_names]
 
   label_arrays = Dict[]
 
   for (i,h5file) in enumerate(h5files)
-    libroot = g_create(h5file, detector_names[i])
-
-    attrs(libroot)["type"] = "EventLibrary"
-    attrs(libroot)["version"] = "1.0"
+    libroot = create_libroot(h5file, detector_names[i])
 
     detector_labels = Dict()
 
@@ -43,11 +52,13 @@ function create_extendible_hdf5_files(output_dir, keylists, detector_names, samp
   return h5files, label_arrays
 end
 
-type EventFormatException <: Exception
-  msg::String
+
+function lazy_read_all(dir::AbstractString)
+  files = readdir(dir)
+  names = [file[1:end-3] for file in files]
+  libs = [lazy_read_library(joinpath(dir, files[i]), names[i]) for i in 1:length(files)]
+  return DLData(libs)
 end
-
-
 
 function lazy_read_library(h5_filepath, libname)
   init = lib -> _initialize_from_file(lib, h5_filepath, libname)
@@ -77,42 +88,53 @@ function lazy_read_library(h5_filepath, libname)
 end
 
 function _initialize_from_file(lib::EventLibrary, h5_filepath, libname)
-  ifile = h5open(h5_filepath, "r")
-  libroot = ifile[libname]
+  h5open(h5_filepath, "r") do ifile
+    libroot = ifile[libname]
 
-  # Read waveforms
-  lib.waveforms = read(libroot["waveforms"])
+    # Read waveforms
+    lib.waveforms = read(libroot["waveforms"])
 
-  # Read labels
-  labels = libroot["labels"]
-  for key in names(labels)
-    data = read(labels[key])
-    lib.labels[Symbol(key)] = data
-  end
-
-  close(ifile)
-end
-
-
-export write_sets
-function write_sets(sets::Dict{Symbol,EventLibrary}, filepath::AbstractString)
-  h5open(filepath, "w") do file
-    for (setname, events) in sets
-      write(file, "$setname/waveforms", events.waveforms)
-      for (key,value) in events.labels
-        write(file, "$setname/labels/"*string(key), value)
-      end
-      for(key,value) in events.prop
-        try
-          write(file, "$setname/prop/"*string(key), value)
-        catch err
-          info("Cannot write property $key: $err")
-        end
-      end
+    # Read labels
+    labels = libroot["labels"]
+    for key in names(labels)
+      data = read(labels[key])
+      lib.labels[Symbol(key)] = data
     end
   end
 end
 
+
+export write_all
+function write_all(data::DLData, dir::AbstractString)
+  isdir(dir) || mkdir(dir)
+  for lib in data
+    filepath = joinpath(dir, name(lib)*".h5")
+    write_lib(lib, filepath)
+  end
+end
+
+export write_lib
+function write_lib(lib::EventLibrary, filepath::AbstractString)
+  h5open(filepath, "w") do h5file
+    libroot = create_libroot(h5file, name(lib))
+
+    write(libroot, "waveforms", waveforms(lib))
+
+    labelsg = g_create(libroot, "labels")
+    for (key,value) in lib.labels
+      write(labelsg, string(key), value)
+    end
+
+    properties = g_create(libroot, "properties")
+    for(key,value) in lib.prop
+      try
+        attrs(properties)[string(key)] = value
+      catch err
+        info("Cannot write property $key: $err")
+      end
+    end
+  end
+end
 
 
 function _str_to_sym_dict(dict)

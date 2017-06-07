@@ -35,17 +35,19 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::Dict{Symbol,EventLib
   end
 end
 
-function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventLibrary; count=20, transform=identity)
+function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventCollection; count=20, transform=identity)
   batch_size = n["batch_size"]
 
   model, dir = plot_autoencoder(env, n)
 
-  if length(data) > count
+  data = flatten(data)
+
+  if eventcount(data) > count
     data = data[1:count]
   end
 
   provider = padded_array_provider(:data, data.waveforms, batch_size)
-  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=length(data), transform=transform, bin_width_ns=sampling_period(data))
+  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=eventcount(data), transform=transform, bin_width_ns=sampling_period(data), legendpos=(data[:waveform_type] == "current" ? :topright : :topleft))
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
@@ -60,7 +62,7 @@ end
 
 function plot_reconstructions(models, names, waveforms, provider, plot_dir;
     file_prefix="", sample_count=20, transform=identity,
-    bin_width_ns=10, y_label="Current pulse", diagram_font=font(14)
+    bin_width_ns=10, y_label="Current pulse", diagram_font=font(14), legendpos=:topright
     )
   # plot_waveform_comparisons(encode_decode(...), ...)
   pred_evals = [transform(mx.predict(model, provider)) for model in models]
@@ -70,7 +72,7 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
   x_axis = linspace(0, (size(truth,1)-1)*bin_width_ns, size(truth,1))
 
   for i in 1:sample_count
-    plot(x_axis, truth[:,i], label="Data", linewidth=2, legendfont=diagram_font, legend=:topright)
+    plot(x_axis, truth[:,i], label="Data", linewidth=2, legendfont=diagram_font, legend=legendpos)
     for modelI in 1:length(models)
       plot!(x_axis, pred_evals[modelI][:,i], linewidth=3, label=names[modelI])
     end
@@ -117,7 +119,7 @@ function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=
   info(env, 2, "Plotting waveforms to $filepath")
 
   if evt_indices == nothing
-    count = min(count, length(events))
+    count = min(count, eventcount(events))
     data = events.waveforms[:,1:count]
   else
     data = events.waveforms[:, evt_indices]
@@ -142,11 +144,11 @@ end
 """
 For each EventLibrary, a number of waveforms are plotted in one diagram. All figures are saved in the given environment using the names of the libraries.
 """
-function plot_waveforms(env::DLEnv, libs::Dict{Symbol, EventLibrary}; count=4, bin_width_ns=10, cut=nothing)
-  for (key,value) in libs
-    plot_waveforms(env, value; count=count, bin_width_ns=bin_width_ns, cut=cut)
+function plot_waveforms(env::DLEnv, data::DLData; count=4, bin_width_ns=10, cut=nothing)
+  for lib in data
+    plot_waveforms(env, lib; count=count, bin_width_ns=bin_width_ns, cut=cut)
   end
-  return libs
+  return data
 end
 
 export plot_waveform_thumbnail

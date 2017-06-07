@@ -9,3 +9,7 @@ function mapvalues(d::Dict, f, post_params...)
   end
   return result
 end
+
+function mapvalues(data::DLData, f, post_params...)
+  return DLData([f(lib, post_params...) for lib in data])
+end

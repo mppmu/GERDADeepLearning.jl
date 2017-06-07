@@ -69,6 +69,16 @@ Base.done(data::DLData, state) = length(data.entries) == state-1
 Base.next(data::DLData, state) = data.entries[state], state+1
 Base.length(data::DLData) = length(data.entries)
 
+export flatten
+function flatten(data::DLData)
+  if length(data.entries) == 0
+    return nothing
+  end
+  if length(data.entries) == 1
+    return data.entries[1]
+  end
+  return cat_events(data.entries...)
+end
 
 export waveforms
 waveforms(lib::EventLibrary) = initialize(lib).waveforms
@@ -79,7 +89,7 @@ sampling_rate(lib::EventLibrary) = lib[:sampling_rate]
 sampling_rate(data::DLData) = sampling_rate(data.entries[1])
 
 export sampling_period
-sampling_period(lib::EventLibrary) = 1/lib.sampling_rate
+sampling_period(lib::EventLibrary) = 1/sampling_rate(lib)
 sampling_period(data::DLData) = sampling_period(data.entries[1])
 
 export sample_size
@@ -126,11 +136,11 @@ function filter_by_proxy(sets::Dict{Symbol,EventLibrary}, predicate_sets::Dict{S
 end
 
 export getindex
-function getindex(events::EventLibrary, key::Symbol)
-  if haskey(events.labels, key)
-    return events.labels[key]
+function getindex(lib::EventLibrary, key::Symbol)
+  if haskey(lib.prop, key)
+    return lib.prop[key]
   else
-    return events.prop[key]
+    return initialize(lib).labels[key]
   end
 end
 
@@ -139,6 +149,7 @@ function getindex(events::EventLibrary, key::AbstractString)
 end
 
 function getindex(events::EventLibrary, selection)
+  initialize(events)
   result = EventLibrary(events.waveforms[:,selection])
   for (key, value) in events.labels
     result.labels[key] = value[selection]
@@ -147,6 +158,13 @@ function getindex(events::EventLibrary, selection)
     result.prop[key] = value
   end
   return result
+end
+
+function getindex{T<:Union{AbstractString,Number}}(events::EventCollection, predicates::Pair{Symbol,T}...)
+  for predicate in predicates
+    events = filter(events, predicate[1], predicate[2])
+  end
+  return events
 end
 
 export eventcount
@@ -198,8 +216,17 @@ function Base.string(events::EventLibrary)
     return "$(name(events)) (not yet initialized)"
   end
 end
-Base.string(data::DLData) = "DLData ($(length(data.entries)) libraries)"
-Base.show(data::DLData) = println(string(data))
+Base.string(data::DLData) = "DLData ($(length(data.entries)) subsets)"
+Base.show(data::DLData) = println(data)
+Base.show(io::IO, data::DLData) = println(io, string(data))
+Base.print(io::IOBuffer, data::DLData) = println(io, string(data))
+Base.print(data::DLData) = print(string(data))
+function Base.println(data::DLData)
+  println(string(data))
+  for lib in data
+    println(string(lib))
+  end
+end
 
 Base.summary(events::EventCollection) = string(events)
 
@@ -246,10 +273,80 @@ end
 
 
 
+export cat_events
+function cat_events(libs::EventLibrary...)
+  @assert length(libs) > 0
+  result = EventLibrary(identity)
+  result.initialization_function = nothing
+  result.waveforms = hcat([lib.waveforms for lib in libs]...)
+  for key in keys(libs[1].labels)
+    result.labels[key] = vcat([lib.labels[key] for lib in libs]...)
+  end
+  # Adopt shared property values
+  for key in keys(libs[1].prop)
+    values = [lib.prop[key] for lib in libs]
+    if !any(x->x!=values[1], values)
+      result.prop[key] = values[1]
+    end
+  end
+  return result
+end
 
-# function cat_events()
-#
-# end
+
+function Base.split(data::DLData, datasets::Dict{AbstractString,Vector{AbstractFloat}})
+    result = DLData(EventLibrary[])
+    for lib in copy(data.entries)
+      split_result = split(lib, datasets)
+      for (set_name, lib) in split_result
+        push!(result.entries, lib)
+      end
+    end
+    return result
+end
+
+function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{AbstractFloat}})
+  keylist_ids = lib[:keylist] # 1-based
+  if eventcount(lib) > 0
+    kl_count = Int(maximum(keylist_ids))
+  else
+    kl_count = 0
+  end
+
+  dsets = Dict{AbstractString,Vector{EventLibrary}}()
+  for (dset_name, dset_sizes) in fractions
+    dsets[dset_name] = EventLibrary[]
+  end
+
+  # for each keylist split separately
+  for keylist_id in 1:kl_count
+    keylist_indices = find(x->x==keylist_id, keylist_ids)
+    N = length(keylist_indices)
+    index_perm = randperm(N)
+
+    depleted_fraction = 0.0
+    # split shuffled indices into data sets
+    for (dset_name, dset_sizes) in fractions
+      dset_frac = dset_sizes[keylist_id]
+      start_i = Int(round(depleted_fraction*N)) + 1
+      end_i = Int(round((depleted_fraction+dset_frac)*N))
+      dset_indices = keylist_indices[index_perm[start_i : end_i]]
+      push!(dsets[dset_name], lib[dset_indices])
+      depleted_fraction += dset_frac
+    end
+    if !(depleted_fraction ≈ 1)
+      info("Some events were not assigned to any data set during split.")
+    end
+  end
+
+  # Combine different keylists
+  result = Dict{AbstractString,EventLibrary}()
+  for dset_name in keys(fractions)
+    result[dset_name] = cat_events(dsets[dset_name]...)
+    result[dset_name].prop[:set] = dset_name
+    setname!(result[dset_name], name(result[dset_name])*"_"*dset_name)
+  end
+  return result
+end
 
 export label_energy_peaks
 function label_energy_peaks(events::EventLibrary, label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)

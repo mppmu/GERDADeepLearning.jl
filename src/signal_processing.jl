@@ -1,6 +1,6 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using DSP
+using DSP, MultiThreadingTools
 
 
 export preprocess_transform
@@ -93,7 +93,7 @@ function baseline(events::EventLibrary)
   bl_size = Int64(round(sample_size(events) / 5))
   weights = hamming(bl_size)
   weights /= sum(weights)
-  for i in 1:eventcount(events)
+  @everythread for i in threadpartition(1:eventcount(events))
     bl_level = dot(events.waveforms[1:bl_size, i], weights)
     events.waveforms[:, i] -= bl_level
   end
@@ -101,8 +101,8 @@ function baseline(events::EventLibrary)
 end
 
 export HE
-function HE(events::EventLibrary)
-  return filter(events, :E, E -> E>1500)
+function HE(events::EventLibrary; cut=1500)
+  return filter(events, :E, E -> E>cut)
 end
 
 export align_peaks
@@ -113,7 +113,7 @@ function align_peaks(events::EventLibrary; target_length=256)
   half = Int64(target_length/2)
   rwf = zeros(Float32, target_length, eventcount(events))
 
-  for i in 1:eventcount(events)
+  @everythread for i in threadpartition(1:eventcount(events))
     max_index = findmax(currents.waveforms[:,i])[2]
     if (max_index < half) || (max_index > s - half)
       events[:FailedPreprocessing][i] = 1
@@ -135,7 +135,7 @@ function align_midpoints(events::EventLibrary; center_y=0.5, target_length=256)
   half = Int64(target_length/2)
   rwf = zeros(Float32, target_length, eventcount(events))
 
-  for i in 1:eventcount(events)
+  @everythread for i in threadpartition(1:eventcount(events))
     index = findmin(abs(charges.waveforms[:,i] - center_y))[2]
     if (index < half) || (index > s - half)
       events[:FailedPreprocessing][i] = 1
@@ -157,7 +157,7 @@ function normalize_energy(events::EventLibrary; value=1)
   weights = hamming(top_size)
   weights /= sum(weights)
 
-  for i in 1:eventcount(events)
+  @everythread for i in threadpartition(1:eventcount(events))
     top_level = dot(charges.waveforms[(end-top_size+1) : end, i], weights)
     events.waveforms[:,i] *= value / top_level
   end
@@ -166,7 +166,7 @@ end
 
 export integrate
 function integrate(events::EventLibrary)
-  for i in 1:eventcount(events)
+  @everythread for i in threadpartition(1:eventcount(events))
     events.waveforms[:,i] = integrate_array(events.waveforms[:,i])
   end
   if events[:waveform_type] == "charge"
@@ -189,7 +189,7 @@ end
 
 export differentiate
 function differentiate(events::EventLibrary)
-  for i in 1:size(events.waveforms,2)
+  @everythread for i in threadpartition(1:size(events.waveforms,2))
       events.waveforms[:,i] = gradient(events.waveforms[:,i])
   end
   if events[:waveform_type] == "current"
