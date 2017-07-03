@@ -5,7 +5,7 @@ using ROOTFramework, Cxx, MGDO, Base.Threads, MultiThreadingTools, HDF5
 
 function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, keylists::Vector{KeyList}; sample_size=1000, verbosity=2)
 
-  label_keys = [:keylist=>Int8, :E=>Float32, :AoE=>Float32, :AoE_class=>Int8, :isTP=>Int8, :isBL=>Int8]
+  label_keys = [:keylist=>Int8, :E=>Float32, :AoE=>Float32, :AoE_class=>Int8, :isTP=>Int8, :isBL=>Int8, :multiplicity=>Int32, :isMuVetoed=>Int8, :isLArVetoed=>Int8]
 
   # Create HDF5 extendible storage
   h5files, h5_arrays = create_extendible_hdf5_files(output_dir, keylists, phase2_detectors, sample_size, 256, label_keys)
@@ -26,10 +26,11 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
           verbosity >= 2 && info("Reading file $total_file_i / $file_count...")
           verbosity >= 3 && info("Tier1: $file1")
           verbosity >= 3 && info("Tier4: $file4")
+          is_physics_data = filekey.event_type == :phy
           results = ThreadLocal{Any}()
           # Run every thread over part of the data
           @everythread begin
-            thread_result = read_single_thread_single_file(phase2_detectors, file1, file4, label_keys, verbosity, sample_size, keylist_id)
+            thread_result = read_single_thread_single_file(phase2_detectors, file1, file4, label_keys, verbosity, sample_size, keylist_id, is_physics_data)
             results[] = thread_result
           end
 
@@ -48,7 +49,7 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
 end
 
 
-function read_single_thread_single_file(detector_names, file1, file4, label_keys, verbosity, sample_size, keylist_id)
+function read_single_thread_single_file(detector_names, file1, file4, label_keys, verbosity, sample_size, keylist_id, is_physics_data::Bool)
   # Create thread-local arrays
   tier4_bindings = TTreeBindings()
   branch_energies = tier4_bindings[:energy] = zeros(Float64, 0)
@@ -59,9 +60,14 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
   branch_aoeVal = tier4_bindings[:psdClassifier_AoE] = zeros(Float64, 0)
   branch_isTP = tier4_bindings[:isTP] = Ref(zero(Int32))
   branch_isBL = tier4_bindings[:isBL] = Ref(zero(Int32))
+  branch_multiplicity = tier4_bindings[:multiplicity] = Ref(zero(Int32))
+  branch_isMuVetoed = tier4_bindings[:isMuVetoed] = Ref(zero(Int32))
+  if is_physics_data
+    branch_isLArVetoed = tier4_bindings[:isLArVetoed] = Ref(zero(Int32))
+  end
 
   # Prepare tables
-  result, keylist, E, AoE, AoE_class, isTP, isBL = create_label_arrays(label_keys, length(detector_names))
+  result, keylist, E, AoE, AoE_class, isTP, isBL, multiplicity, isMuVetoed, isLArVetoed = create_label_arrays(label_keys, length(detector_names))
   waveforms = [Vector{Float32}[] for i in 1:length(detector_names)]
   result[:waveforms] = waveforms
 
@@ -92,6 +98,13 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
           end
           push!(isTP[detector], branch_isTP.x)
           push!(isBL[detector], branch_isBL.x)
+          push!(multiplicity[detector], branch_multiplicity.x)
+          push!(isMuVetoed[detector], branch_isMuVetoed.x)
+          if is_physics_data
+            push!(isLArVetoed[detector], branch_isLArVetoed.x)
+          else
+            push!(isLArVetoed, 0)
+          end
         end # for
       end # for
     end # open

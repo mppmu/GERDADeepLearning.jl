@@ -82,8 +82,7 @@ end
 
 
 export autoencoder
-function autoencoder(env::DLEnv,
-    training_data::EventLibrary, eval_data::EventLibrary; id="autoencoder", action::Symbol=:auto)
+function autoencoder(env::DLEnv, data::EventCollection; id="autoencoder", action::Symbol=:auto, train_key="train", xval_key="xval")
 
   if action == :auto
     action = decide_best_action(network(env,id))
@@ -92,25 +91,32 @@ function autoencoder(env::DLEnv,
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
-      :label => waveforms(training_data), batch_size=n["batch_size"])
-  eval_provider = mx.ArrayDataProvider(:data => waveforms(eval_data),
-      :label => waveforms(eval_data), batch_size=n["batch_size"])
+  if action != :load
+    training_waveforms = waveforms(data[:set=>train_key])
+    xval_data = data[:set=>xval_key]
+
+    if eventcount(xval_data) < n["batch_size"]
+      n["batch_size"] = eventcount(xval_data)
+      info("Cross validation set only has $(eventcount(xval_data)) data points. Adjusting bach size accordingly.")
+    end
+    xval_waveforms = waveforms(xval_data)
+    train_provider = mx.ArrayDataProvider(:data => training_waveforms,
+        :label => training_waveforms, batch_size=n["batch_size"])
+    eval_provider = mx.ArrayDataProvider(:data => xval_waveforms,
+        :label => xval_waveforms, batch_size=n["batch_size"])
+  else
+    train_provider = nothing
+    eval_provider = nothing
+  end
 
   build(n, action, train_provider, eval_provider, _build_conv_autoencoder; verbosity=get_verbosity(env))
   return n
 end
 
-function autoencoder(env::DLEnv, data::DLData;
-  id="autoencoder", action::Symbol=:auto,
-  train_key="train", xval_key="xval")
-  return autoencoder(env, flatten(filter(data, :set, train_key)), flatten(filter(data, :set, xval_key)); id=id, action=action)
-end
-
 
 export decoder
-function decoder(env::DLEnv, latent_data::DLData,
-  target_data::DLData; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
+function decoder(env::DLEnv, latent_data::EventCollection,
+  target_data::EventCollection; id="decoder", action::Symbol=:auto, train_key=:train, xval_key=:xval)
 
   if action == :auto
     action = decide_best_action(network(env,id))
@@ -119,10 +125,10 @@ function decoder(env::DLEnv, latent_data::DLData,
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => waveforms(filter(latent_data, :set, train_key)),
-      :label => waveforms(filter(target_data, :set, train_key)), batch_size=n["batch_size"])
-  eval_provider = mx.ArrayDataProvider(:data => waveforms(filter(latent_data, :set, xval_key)),
-      :label => waveforms(filter(target_data, :set, xval_key)), batch_size=n["batch_size"])
+  train_provider = mx.ArrayDataProvider(:data => waveforms(latent_data[:set=>train_key]),
+      :label => waveforms(target_data[:set=>train_key]), batch_size=n["batch_size"])
+  eval_provider = mx.ArrayDataProvider(:data => waveforms(latent_data[:set=>xval_key]),
+      :label => waveforms(target_data[:set=>xval_key]), batch_size=n["batch_size"])
 
   full_size = sample_size(target_data)
   build(n, action, train_provider, eval_provider, (p, s) -> _build_conv_decoder(full_size, p, s);
@@ -135,12 +141,18 @@ export encode
 function encode(events::EventLibrary, n::NetworkInfo; log=false)
   log && info("$(n.name): encoding '$(name(events))'...")
   model = n.model
-  model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true)
-  provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=n["batch_size"])
-  transformed = mx.predict(model, provider)
+  model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true, n.context)
 
   result = copy(events)
-  result.waveforms = transformed
+
+  if eventcount(events) > 0
+    provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=min(n["batch_size"], eventcount(events)))
+    transformed = mx.predict(model, provider)
+    result.waveforms = transformed
+  else
+    result.waveforms = zeros(Float32, 0, 0)
+  end
+
   setname!(result, name(result)*"_encoded")
   push_classifier!(result, "Autoencoder")
   return result
@@ -157,10 +169,10 @@ function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training
   loss, X = _build_conv_decoder(X, Y, n.config, pulse_size)
-  model = subnetwork(n.model, mx.FeedForward(loss, context=best_device()))
+  model = subnetwork(n.model, mx.FeedForward(loss, context=n.context))
 
   batch_size=n["batch_size"]
-  if length(compact) < batch_size
+  if eventcount(compact) < batch_size
       compact.waveforms = hcat(compact.waveforms, fill(0, size(compact.waveforms, 1), batch_size-size(compact.waveforms, 2)))
   end
 
@@ -193,7 +205,7 @@ end
 export encode_decode
 function encode_decode(events::EventLibrary, n::NetworkInfo)
   batch_size=n["batch_size"]
-  provider = padded_array_provider(:data, events.waveforms, batch_size)
+  provider = padded_array_provider(:data, waveforms(events), batch_size)
   reconst = mx.predict(n.model, provider)
 
   result = copy(events)

@@ -67,6 +67,10 @@ function calculate_parameters(model, filepath)
   close(file)
  end
 
+ function get_total_parameter_count(model)
+   return sum([length(param[2]) for param in model.arg_params])
+ end
+
 
  function to_context(gpus::Vector{Int})
    if length(gpus) == 0
@@ -140,10 +144,9 @@ function calculate_parameters(model, filepath)
       new(name, dir, config, context, nothing, 0, Float64[], Float64[])
  end
 
-export getindex
- function getindex(n::NetworkInfo, key)
-  return n.config[key]
-end
+
+Base.getindex(n::NetworkInfo, key::AbstractString) = n.config[key]
+Base.setindex!(n::NetworkInfo, value, key::AbstractString) = n.config[key] = value
 
 function save_compatible_heckpoint(sym :: mx.SymbolicNode, arg_params :: Dict{Base.Symbol, mx.NDArray}, aux_params :: Dict{Base.Symbol, mx.NDArray}, prefix :: AbstractString, epoch :: Int)
   if epoch <= 1
@@ -185,22 +188,44 @@ function train(n::NetworkInfo,
       verbosity=2)
   learning_rate = n["learning_rate"]
   epochs = n["epochs"]
+  optimizer_name = n["optimizer"]
+
+  if epochs <= n.epoch
+    verbosity >= 2 && info("$(n.name): Target epoch already reached.")
+    return
+  end
 
   training_curve = PlotCallback()
   eval_curve = Float64[]
 
   metric = mx.MSE()
 
-  optimizer = mx.ADAM(lr=learning_rate)
-  verbosity >= 2 && info("Starting training on $(n.context) (from $(n.epoch+1) to $epochs)... ")
+  if optimizer_name == "SGD"
+    optimizer = mx.SGD(lr=learning_rate, momentum=n["momentum"])
+  elseif optimizer_name == "ADAM"
+    optimizer = mx.ADAM(lr=learning_rate)
+  elseif optimizer_name == "None"
+    optimizer = mx.SGD(lr=1e-9)
+  end
+  # optimizer = mx.SGD(lr=learning_rate, momentum=0.9)
 
-  # if !isdefined(n.model, :arg_params)
-  #   mx.init_model(n.model, mx.UniformInitializer(0.01); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
+  # Manual initialization
+  if !isdefined(n.model, :arg_params)
+    mx.init_model(n.model, mx.UniformInitializer(0.1); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
+  end
+
+  verbosity >= 2 && info("$(train_provider.sample_count) data points, $(get_total_parameter_count(n.model)) learnable parameters, dropout=$(n["dropout"]), batch size $(train_provider.batch_size), using $optimizer_name with learning rate $learning_rate")
+  verbosity >= 2 && info("Starting training on $(n.context) (from $(n.epoch+1) to $epochs)... ")
+  verbosity >= 3 && info("Untrained MSE: $(eval(n.model, eval_provider, mx.MSE())[1][2])")
+
+  # for arg_param in n.model.arg_params
+  #   print("$(arg_param[1]): ")
+  #   println(copy(arg_param[2])[1:min(8, length(arg_param[2]))])
   # end
   # kvstore, update_on_kvstore = mx_create_kvstore(:device, length(n.model.ctx), n.model.arg_params)
 
+  # Train each step manually
   for epoch in (n.epoch+1) : epochs
-    verbosity >= 2 && info("Epoch $epoch / $epochs")
     mx.fit(n.model, optimizer, train_provider,
            n_epoch=1,
            eval_metric=metric,
@@ -209,12 +234,12 @@ function train(n::NetworkInfo,
            kvstore=:device)
     save_compatible_heckpoint(n.model.arch, n.model.arg_params, n.model.aux_params, joinpath(n.dir,n.name), epoch)
 
-    eval_mse = eval(n.model, eval_provider, mx.MSE())
-    push!(eval_curve, eval_mse[1][2])
+    eval_mse = eval(n.model, eval_provider, mx.MSE())[1][2]
+    push!(eval_curve, eval_mse)
+    verbosity >= 3 && info("Epoch $epoch / $epochs: MSE = $eval_mse.")
   end
 
-  # mx.fit(n.model, optimizer, train_provider,
-  # n_epoch=epochs, eval_metric=metric, callbacks=[training_curve], kvstore=:device)
+  # mx.fit(n.model, optimizer, train_provider, n_epoch=epochs, eval_metric=metric, callbacks=[training_curve], kvstore=:device) # TODO
 
   n.epoch = epochs
 
@@ -286,7 +311,7 @@ end
 
 
 function eval(model, provider::mx.ArrayDataProvider, metric::mx.AbstractEvalMetric)
-  prediction = mx.predict(model, provider)
+  prediction = mx.predict(model, provider; verbosity=0)
   data = provider.label_arrays[1]
   mx.reset!(metric)
 

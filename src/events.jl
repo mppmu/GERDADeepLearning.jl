@@ -29,12 +29,13 @@ end
 export DLData
 type DLData <: EventCollection
   entries :: Vector{EventLibrary}
+  dir :: Union{AbstractString,Void}
 
   function DLData(entries::Vector{EventLibrary})
     for e in entries
       @assert e != nothing
     end
-    new(entries)
+    new(entries, nothing)
   end
 end
 
@@ -56,6 +57,12 @@ function initialize(lib::EventLibrary)
   end
   return lib
 end
+
+function dispose(lib::EventLibrary)
+  lib.waveforms = zeros(Float32, 0, 0)
+  empty!(lib.labels)
+end
+dispose(data::DLData) = for lib in data didpose(lib) end
 
 function initialize(data::DLData)
   for lib in data
@@ -82,7 +89,7 @@ end
 
 export waveforms
 waveforms(lib::EventLibrary) = initialize(lib).waveforms
-waveforms(data::DLData) = [waveforms(e) for e in data]
+waveforms(data::DLData) = waveforms(flatten(data))
 
 export sampling_rate
 sampling_rate(lib::EventLibrary) = lib[:sampling_rate]
@@ -125,14 +132,51 @@ function filter(data::DLData, predicate_key::Symbol, predicate::Function)
 end
 
 
-export filter_by_proxy
-function filter_by_proxy(sets::Dict{Symbol,EventLibrary}, predicate_sets::Dict{Symbol,EventLibrary}, predicate_key, predicate)
-  result = Dict{Symbol,EventLibrary}()
-  for (key, lib) in sets
-    indices = find(predicate, predicate_sets[key].labels[predicate_key])
-    result[key] = lib[indices]
+Base.filter!(lib::EventCollection, key::Symbol, value::Union{AbstractString,Number}) = filter!(lib, key, x -> x==value)
+Base.filter!{T<:Union{AbstractString,Number}}(lib::EventCollection, key::Symbol, values::Vector{T}) = filter!(lib, key, x -> x in values)
+
+function Base.filter!(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
+  if is_initialized(lib)
+    indices = find(predicate, lib.labels[predicate_key])
+    lib.waveforms = lib.waveforms[:,indices]
+    for label in keys(lib.labels)
+      lib.labels[label] = lib.labels[label][indices]
+    end
+    return lib
+  else
+    prev_initialization = lib.initialization_function
+    lib.initialization_function = lib2 -> begin
+      lib2.initialization_function = nothing
+      prev_initialization(lib2)
+      filter!(lib2, predicate_key, predicate)
+    end
+    return lib
   end
-  return result
+end
+
+function Base.filter!(data::DLData, predicate_key::Symbol, predicate::Function)
+  if hasproperty(data, predicate_key)
+    # Filter list of datasets
+    filtered_indices = find(lib -> predicate(lib.prop[predicate_key]), data.entries)
+    data.entries = data.entries[filtered_indices]
+    return data
+  else
+    # Filter individual datasets
+    for lib in data
+      filter!(lib, predicate_key, predicate)
+    end
+  end
+end
+
+
+export filter_by_proxy
+function filter_by_proxy(lib::EventLibrary, predicate_lib::EventLibrary, predicate_key, predicate)
+  @assert eventcount(lib) == eventcount(predicate_lib)
+  indices = find(predicate, predicate_lib[predicate_key])
+  return lib[indices]
+end
+function filter_by_proxy(data::DLData, predicate_data::DLData, predicate_key, predicate)
+  return DLData([filter_by_proxy(data.entries[i], predicate_data.entries[i], predicate_key, predicate) for i in 1:length(data.entries)])
 end
 
 export getindex
@@ -143,6 +187,7 @@ function getindex(lib::EventLibrary, key::Symbol)
     return initialize(lib).labels[key]
   end
 end
+getindex(data::DLData, key::Symbol) = flatten(data)[key]
 
 function getindex(events::EventLibrary, key::AbstractString)
   return getindex(events, Symbol(key))
@@ -276,12 +321,23 @@ end
 export cat_events
 function cat_events(libs::EventLibrary...)
   @assert length(libs) > 0
+  nonempty = find(lib->eventcount(lib)>0, libs)
+
   result = EventLibrary(identity)
   result.initialization_function = nothing
-  result.waveforms = hcat([lib.waveforms for lib in libs]...)
-  for key in keys(libs[1].labels)
-    result.labels[key] = vcat([lib.labels[key] for lib in libs]...)
+
+  # Cat waveforms
+  if length(nonempty) > 0
+    result.waveforms = hcat([lib.waveforms for lib in libs[nonempty]]...)
+    # Cat labels
+    for key in keys(libs[1].labels)
+      result.labels[key] = vcat([lib.labels[key] for lib in libs[nonempty]]...)
+    end
+  else
+    result.waveforms = libs[1].waveforms
+    result.labels = copy(libs[1]).labels
   end
+
   # Adopt shared property values
   for key in keys(libs[1].prop)
     values = [lib.prop[key] for lib in libs]
@@ -303,6 +359,10 @@ function Base.split(data::DLData, datasets::Dict{AbstractString,Vector{AbstractF
     end
     return result
 end
+
+
+# function split_uninitialized(lib::EventLibrary, fractions::Dict{AbstractString,Vector{AbstractFloat}})
+# end
 
 function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{AbstractFloat}})
   keylist_ids = lib[:keylist] # 1-based
@@ -341,7 +401,11 @@ function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{Abs
   # Combine different keylists
   result = Dict{AbstractString,EventLibrary}()
   for dset_name in keys(fractions)
-    result[dset_name] = cat_events(dsets[dset_name]...)
+    if eventcount(lib) > 0
+      result[dset_name] = cat_events(dsets[dset_name]...)
+    else
+      result[dset_name] = copy(lib)
+    end
     result[dset_name].prop[:set] = dset_name
     setname!(result[dset_name], name(result[dset_name])*"_"*dset_name)
   end
@@ -378,7 +442,7 @@ function equalize_counts_by_label(events::EventLibrary, label_key=:SSE)
   i_SSE = find(x -> x==1, labels)
   i_MSE = find(x -> x==0, labels)
   count = min(length(i_SSE), length(i_MSE))
-  println("Equalizing $(name(events)) to $count counts. SSE: $(length(i_SSE)), MSE: $(length(i_MSE))")
+  info("Equalizing $(name(events)) to $count counts. SSE: $(length(i_SSE)), MSE: $(length(i_MSE))")
 
   # trim and shuffle
   used_indices = [i_SSE[1:count];i_MSE[1:count]]

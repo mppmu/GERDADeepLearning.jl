@@ -33,25 +33,47 @@ function dnn_classifier(env::DLEnv, data::DLData;
 
   if action == :auto
     action = decide_best_action(network(env,id))
-    println("$id: auto-selected action is $action")
-  end
-
-  training_data = flatten(data[:set=>train_key])
-  xval_data = flatten(data[:set=>xval_key])
-
-  # Preprocessing
-  if !haskey(training_data, label_key)
-    println("$id: preprocessing - adding default labels and equalizing class count...")
-    training_data, indices = equalize_counts_by_label(training_data, label_key)
-    xval_data, indices = equalize_counts_by_label(xval_data, label_key)
+    info(env, 2, "$id: auto-selected action is $action")
   end
 
   n = network(env, id)
 
-  train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
-      :label => training_data[label_key], batch_size=n["batch_size"])
-  xval_provider = mx.ArrayDataProvider(:data => waveforms(xval_data),
-      :label => xval_data[label_key], batch_size=n["batch_size"])
+  if action != :load
+    training_data = flatten(data[:set=>train_key])
+    xval_data = flatten(data[:set=>xval_key])
+
+    # Preprocessing
+    if !haskey(training_data, label_key)
+      info(env, 2, "$id: No labels found on training data -> Using default energy labels from label_energy_peaks()")
+      label_energy_peaks(training_data, label_key)
+      label_energy_peaks(xval_data, label_key)
+    end
+    if length(find(x->x==-1, training_data[label_key])) > 0
+      info(env, 2, "$id: Removing unlabeled events and equalizing class counts.")
+      training_data, indices = equalize_counts_by_label(training_data, label_key)
+      xval_data, indices = equalize_counts_by_label(xval_data, label_key)
+    end
+
+
+    if eventcount(xval_data) < n["batch_size"]
+      n["batch_size"] = eventcount(xval_data)
+      info("Cross validation set only has $(eventcount(xval_data)) data points. Adjusting bach size accordingly.")
+    end
+
+    train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
+        :label => transpose(training_data[label_key]), batch_size=n["batch_size"])
+    xval_provider = mx.ArrayDataProvider(:data => waveforms(xval_data),
+        :label => transpose(xval_data[label_key]), batch_size=n["batch_size"])
+  else
+    train_provider = nothing
+    xval_provider = nothing
+  end
+
+  min_eval_count = minimum([eventcount(data[:set=>e]) for e in evaluate])
+  if min_eval_count < n["batch_size"]
+    n["batch_size"] = min_eval_count
+    info("A test set only has $min_eval_count data points. Adjusting bach size accordingly.")
+  end
 
   build(n, action, train_provider, xval_provider, _build_dnn_classifier)
 
@@ -65,9 +87,15 @@ function dnn_classifier(env::DLEnv, data::DLData;
 end
 
 export predict
-function predict(data::EventLibrary, n::NetworkInfo; psd_name=:psd)
-  provider = mx.ArrayDataProvider(:data => waveforms(data), batch_size=n["batch_size"])
-  predictions = mx.predict(n.model, provider)
-  data.labels[psd_name] = predictions[1,:]
+function predict(data::EventLibrary, n::NetworkInfo, psd_name=:psd)
+  if eventcount(data) > 0
+    provider = mx.ArrayDataProvider(:data => waveforms(data), batch_size=n["batch_size"])
+    predictions = mx.predict(n.model, provider)
+    data.labels[psd_name] = predictions[1,:]
+  else
+    data.labels[psd_name] = zeros(Float32, 0)
+  end
   push_classifier!(data, "Neural Network")
 end
+
+predict(data::DLData, n::NetworkInfo; psd_name=:psd) = mapvalues(data, predict, n, psd_name)

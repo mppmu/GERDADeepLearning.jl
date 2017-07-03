@@ -4,30 +4,24 @@ using DSP, MultiThreadingTools
 
 
 export preprocess_transform
-function preprocess_transform(env::DLEnv, data::DLData; steps_name="preprocessing", copyf=deepcopy)
+function preprocess_transform(env::DLEnv, lib::EventLibrary; steps_name="preprocessing", copyf=deepcopy)
+  initialize(lib)
   steps = convert(Array{String}, env.config[steps_name])
-  result = copyf(data)
-  setname!(result, name(data).*"_preprocessed")
-  for lib in result
-    put_label!(lib, :FailedPreprocessing, zeros(Float32, eventcount(lib)))
-    lib.prop[:preprocessing] = steps
-  end
+  result = copyf(lib)
+  setname!(result, name(lib)*"_preprocessed")
+  put_label!(result, :FailedPreprocessing, zeros(Float32, eventcount(lib)))
+  result.prop[:preprocessing] = steps
 
   # perform the steps
   for (i,step) in enumerate(steps)
-    info(env, 2, "Preprocesing $step...")
+    info(env, 3, "Preprocesing $step...")
     pfunction = eval(parse(step))
-    for (i,lib) in enumerate(result)
-      info(env, 3, "Preprocesing $step: $(name(lib)).")
-      result.entries[i] = pfunction(lib)
-    end
+    result = pfunction(result)
   end
 
-  for lib in result
-    failed_count = length(find(f -> f != 0, lib[:FailedPreprocessing]))
-    if failed_count > 0
-      info(env, 1, "Preprocesing failed for $failed_count events in $(name(lib)). These have been tagged with the label :FailedPreprocessing = 1")
-    end
+  failed_count = length(find(f -> f != 0, result[:FailedPreprocessing]))
+  if failed_count > 0
+    info(env, 1, "Preprocesing failed for $failed_count events in $(name(lib)). These have been tagged with the label :FailedPreprocessing = 1")
   end
 
   return result
@@ -101,7 +95,7 @@ function baseline(events::EventLibrary)
 end
 
 export HE
-function HE(events::EventLibrary; cut=1500)
+function HE(events::EventLibrary; cut=1000)
   return filter(events, :E, E -> E>cut)
 end
 
@@ -127,7 +121,7 @@ function align_peaks(events::EventLibrary; target_length=256)
   return events
 end
 
-export align_centers
+export align_midpoints
 function align_midpoints(events::EventLibrary; center_y=0.5, target_length=256)
   charges = charge_pulses(events; create_new=true)
 
@@ -189,7 +183,7 @@ end
 
 export differentiate
 function differentiate(events::EventLibrary)
-  @everythread for i in threadpartition(1:size(events.waveforms,2))
+  @everythread for i in threadpartition(1:eventcount(events))
       events.waveforms[:,i] = gradient(events.waveforms[:,i])
   end
   if events[:waveform_type] == "current"
@@ -199,3 +193,28 @@ function differentiate(events::EventLibrary)
   end
   return events
 end
+
+
+function Base.scale(lib::EventLibrary, val::Number)
+  lib = copy(initialize(lib))
+  lib.waveforms = lib.waveforms * val
+  return lib
+end
+
+function Base.scale(data::DLData, val::Number)
+  return DLData([scale(lib, val) for lib in data])
+end
+
+type NaNError <: Exception
+    msg::AbstractString
+end
+
+export check_nan
+function check_nan(lib::EventLibrary)
+  wf = waveforms(lib)
+  nan_indices = find(x->isnan(x), wf)
+  if length(nan_indices) > 0
+    raise(NaNError("At indices $nan_indices"))
+  end
+end
+check_nan(data::DLData) = for lib in data check_nan(lib) end

@@ -1,6 +1,6 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using JSON
+using JSON, Base.Threads, MultiThreadingTools
 
 import Base: get, contains
 
@@ -39,7 +39,7 @@ end
 export new_properties!
 function new_properties!(modifier, env::DLEnv, template_name::AbstractString, new_name::AbstractString)
   d = copy(get_properties(env, template_name))
-  d = modifier(d)
+  modifier(d)
   set_properties!(env, new_name, d)
   return d
 end
@@ -59,7 +59,7 @@ end
 
 function Base.info(env::DLEnv, level::Integer, msg::AbstractString)
   if env._verbosity >= level
-    info(msg)
+    threadsafe_info(msg)
   end
 end
 
@@ -136,7 +136,7 @@ end
 function _get_raw_data(env::DLEnv; targets::Array{String}=String[])
   raw_dir = resolvepath(env, "data", "raw")
   if !isdir(raw_dir)
-    _create_h5data(raw_dir)
+    _create_h5data(env, raw_dir)
   end
   return lazy_read_all(raw_dir)
 end
@@ -146,18 +146,33 @@ export preprocess
 function preprocess(env::DLEnv, data::DLData)
   select_channels=parse_detectors(env["detectors"])
   if isa(select_channels,Vector) && length(select_channels) > 0
-    data = filter(data, :detector_id, select_channels)
+    filter!(data, :detector_id, select_channels)
   end
 
-  data = _builtin_filter(env, "test-pulses", data, :isTP, isTP -> isTP == 0)
-  data = _builtin_filter(env, "baseline-events", data, :isBL, isBL -> isBL == 0)
-  data = _builtin_filter(env, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
+  _builtin_filter(env, "test-pulses", data, :isTP, isTP -> isTP == 0)
+  _builtin_filter(env, "baseline-events", data, :isBL, isBL -> isBL == 0)
+  _builtin_filter(env, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
 
-  data = preprocess_transform(env, data)
+  N_dset = length(parse_datasets(env))
+  result = DLData(fill(EventLibrary(zeros(0,0)), length(data)*N_dset))
+  result.dir = _cachedir(env, "tmp-preprocessed")
 
-  data = split(env, data)
+  for i in 1:length(data)
+    lib = data.entries[i]
+    info(env,2, "Preprocessing $(name(lib))")
+    lib_t = preprocess_transform(env, lib; copyf=identity)
+    part_data = DLData(collect(values(split(env, lib_t))))
+    write_all_sequentially(part_data, result.dir, true)
+    info(env,3, "Wrote datasets of $(name(lib)) and released allocated memory.")
+    dispose(lib)
+    dispose(lib_t)
+    for j in 1:length(part_data)
+      result.entries[N_dset*(i-1) + j] = part_data.entries[j]
+    end
+    @assert length(lib.waveforms) == 0 && length(lib_t.waveforms) == 0
+  end
 
-  return data
+  return result
 end
 
 
@@ -165,14 +180,14 @@ function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exc
   # TODO per detector to save memory
   ftype = env.config[ftype_key]
   if ftype == "exclude"
-    before = eventcount(data)
-    result = filter(data, label, exclude_prededicate)
-    info(env, 2, "Excluded $(before-(eventcount(result))) $ftype_key of $before events.")
+    # before = eventcount(data) # This cannot be done lazily
+    result = filter!(data, label, exclude_prededicate)
+    # info(env, 2, "Excluded $(before-(eventcount(result))) $ftype_key of $before events.")
     return result
   elseif ftype == "include"
     return data
   elseif ftype == "only"
-    return filter(data, label, x -> !exclude_prededicate(x))
+    return filter!(data, label, x -> !exclude_prededicate(x))
   else
     throw(ArgumentError("Unknown filter keyword in configuration $ftype_key: $ftype"))
   end
@@ -196,10 +211,8 @@ function parse_datasets(env::DLEnv)
   return result
 end
 
-function Base.split(env::DLEnv, data::DLData)
-  datasets = parse_datasets(env)
-  return split(data, datasets)
-end
+Base.split(env::DLEnv, data::EventCollection) = split(data, parse_datasets(env))
+
 
 function setup(env::DLEnv)
   e_mkdir(env.dir)
@@ -210,7 +223,7 @@ end
 e_mkdir(dir) = !isdir(dir) && mkdir(dir)
 
 export get
-function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[])
+function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[], uninitialize=true)
   if !isempty(targets) && containsall(env, targets)
     info(env, 2, "Skipping retrieval of '$lib_name'.")
     return nothing
@@ -227,8 +240,14 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
       throw(TypeError(Symbol(compute), "get_or_compute", DLData, data))
     end
 
-    push!(env, lib_name, data)
-    return data
+    if data.dir == nothing
+      push!(env, lib_name, data; uninitialize=uninitialize)
+      return data
+    else
+      # Rename directory
+      mv(data.dir, _cachedir(env, lib_name))
+      return get(env, lib_name)
+    end
   end
 end
 
@@ -237,11 +256,11 @@ function get(env::DLEnv, lib_name::String)
   return env._ext_event_libs[lib_name]
 end
 
-function Base.push!(env::DLEnv, lib_name::String, data::DLData)
+function Base.push!(env::DLEnv, lib_name::String, data::DLData; uninitialize::Bool=false)
   _ensure_ext_loaded(env, lib_name)
   env._ext_event_libs[lib_name] = data
   if env.config["cache"]
-    write_all(data, joinpath(env.dir, "data", lib_name))
+    write_all_multithreaded(data, joinpath(env.dir, "data", lib_name), uninitialize)
   end
 end
 

@@ -1,6 +1,6 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using HDF5
+using HDF5, Base.Threads, MultiThreadingTools
 
 type EventFormatException <: Exception
   msg::String
@@ -92,7 +92,12 @@ function _initialize_from_file(lib::EventLibrary, h5_filepath, libname)
     libroot = ifile[libname]
 
     # Read waveforms
-    lib.waveforms = read(libroot["waveforms"])
+    try
+      lib.waveforms = read(libroot["waveforms"])
+    catch err
+      info("Illegal waveform data for lib $(name(lib)).")
+      lib.waveforms = zeros(Float32, 1, 0)
+    end
 
     # Read labels
     labels = libroot["labels"]
@@ -105,16 +110,28 @@ end
 
 
 export write_all
-function write_all(data::DLData, dir::AbstractString)
+function write_all_sequentially(data::DLData, dir::AbstractString, uninitialize::Bool)
   isdir(dir) || mkdir(dir)
   for lib in data
     filepath = joinpath(dir, name(lib)*".h5")
-    write_lib(lib, filepath)
+    write_lib(lib, filepath, uninitialize)
+  end
+end
+
+export write_all
+function write_all_multithreaded(data::DLData, dir::AbstractString, uninitialize::Bool)
+  isdir(dir) || mkdir(dir)
+  @everythread begin
+    for i in threadpartition(1:length(data))
+      lib = data.entries[i]
+        filepath = joinpath(dir, name(lib)*".h5")
+        write_lib(lib, filepath, uninitialize)
+    end
   end
 end
 
 export write_lib
-function write_lib(lib::EventLibrary, filepath::AbstractString)
+function write_lib(lib::EventLibrary, filepath::AbstractString, uninitialize::Bool)
   h5open(filepath, "w") do h5file
     libroot = create_libroot(h5file, name(lib))
 
@@ -130,11 +147,18 @@ function write_lib(lib::EventLibrary, filepath::AbstractString)
       try
         attrs(properties)[string(key)] = value
       catch err
-        info("Cannot write property $key: $err")
+        threadsafe_info("Cannot write property $key: $err")
       end
     end
   end
+
+  if uninitialize
+    lib.waveforms = zeros(Float32, 0, 0)
+    empty!(lib.labels)
+    lib.initialization_function = lib2 -> _initialize_from_file(lib2, filepath, name(lib))
+  end
 end
+
 
 
 function _str_to_sym_dict(dict)

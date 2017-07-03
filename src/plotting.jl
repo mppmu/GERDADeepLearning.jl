@@ -1,17 +1,29 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using MXNet, Plots
+using MXNet, Plots, StatsBase
 
 
-function plot_learning_curves(n::NetworkInfo, filename)
+function plot_learning_curves(n::NetworkInfo, filename; from_zero::Bool=false)
   train = n.training_curve
   xval = n.xval_curve
-  plot(size=(400,300))
-  plot!(train, label="Training set")
-  plot!(xval, label="Validation set")
-  xaxis!("Data passes")
-  yaxis!("Mean squared error")
-  savefig(filename)
+  plot(size=(800,500), legendfont=font(20))
+  plot!(train, label="Training set", line=2)
+  plot!(xval, label="Validation set", line=2)
+  xaxis!("Training time (epochs)", font(20))
+  yaxis!("Mean squared error", font(20))
+  if from_zero
+    yaxis!((0, max(maximum(train), maximum(xval))))
+  end
+  savefig("$filename.pdf")
+  savefig("$filename.png")
+end
+
+export plot_dnn
+function plot_dnn(env::DLEnv, n::NetworkInfo)
+  dir = joinpath(env.dir, "plots", n.name)
+  isdir(dir) || mkdir(dir)
+  info(env, 2, "Generating plots in $dir...")
+  plot_learning_curves(n, joinpath(dir, "learning_curves"))
 end
 
 export plot_autoencoder
@@ -22,7 +34,7 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo)
 
   model = n.model
 
-  plot_learning_curves(n, joinpath(dir, "learning_curves.pdf"))
+  plot_learning_curves(n, joinpath(dir, "learning_curves"); from_zero=true)
   visualize_1D_convolution(model, :conv_1_weight, joinpath(dir,"filters1.png"))
   visualize_2D_convolution(model, :conv_2_weight, joinpath(dir,"filter2"))
   info(env, 2, "Saved network plots to $dir")
@@ -46,8 +58,8 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventCollection; cou
     data = data[1:count]
   end
 
-  provider = padded_array_provider(:data, data.waveforms, batch_size)
-  plot_reconstructions([model], ["Reconstruction"], data.waveforms, provider, dir, file_prefix=name(data)*"-", sample_count=eventcount(data), transform=transform, bin_width_ns=sampling_period(data), legendpos=(data[:waveform_type] == "current" ? :topright : :topleft))
+  provider = padded_array_provider(:data, waveforms(data), batch_size)
+  plot_reconstructions([n.model], ["Reconstruction"], waveforms(data), provider, dir, file_prefix=name(data)*"-", sample_count=eventcount(data), transform=transform, bin_width_ns=sampling_period(data), legendpos=(data[:waveform_type] == "current" ? :topright : :topleft))
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
@@ -69,9 +81,9 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
   truth = transform(waveforms)
 
   sample_count = min(sample_count, size(truth, 2))
-  x_axis = linspace(0, (size(truth,1)-1)*bin_width_ns, size(truth,1))
+  x_axis = linspace(0, (size(truth,1)-1)*bin_width_ns*1e9, size(truth,1))
 
-  for i in 1:sample_count
+  reconst_animation = @animate for i in 1:sample_count
     plot(x_axis, truth[:,i], label="Data", linewidth=2, legendfont=diagram_font, legend=legendpos)
     for modelI in 1:length(models)
       plot!(x_axis, pred_evals[modelI][:,i], linewidth=3, label=names[modelI])
@@ -80,6 +92,7 @@ function plot_reconstructions(models, names, waveforms, provider, plot_dir;
    yaxis!(y_label, diagram_font)
    savefig("$plot_dir/reconst-$(file_prefix)$i.png")
   end
+  gif(reconst_animation, "$plot_dir/reconstructions.gif", fps=1)
 end
 
 export plot_waveform_comparisons
@@ -210,9 +223,9 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
 
   events = filter(events, :E, e -> (e < 3800 && e > 600))
 
-  bins = linspace(minimum(events.labels[psd_key]),maximum(events.labels[psd_key]), nbins)
+  bins = linspace(minimum(events.labels[psd_key]), maximum(events.labels[psd_key]), nbins)
 
-  if haskey(events.labels, label_key)
+  if haskey(events, label_key)
     labels = events[label_key]
     psd = events[psd_key]
 
@@ -220,27 +233,36 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
     psd_MSE = psd[find(l -> l==0, labels)]
 
     # Overall PSD distribution
-    histogram(psd_SSE, bins=bins, label="Tl DEP", legendfont=diagram_font, linewidth=0)
-    histogram!(psd_MSE, bins=bins, label="Bi FEP", fillalpha=0.7, legendfont=diagram_font, linewidth=0)
+    histogram(psd_SSE, bins=bins, label="Tl DEP ($(length(psd_SSE)) events)", legendfont=diagram_font, linewidth=0)
+    histogram!(psd_MSE, bins=bins, label="Bi FEP ($(length(psd_MSE)) events)", fillalpha=0.7, legendfont=diagram_font, linewidth=0)
     xaxis!("Classifier response", diagram_font)
     yaxis!("Event count", diagram_font)
     savefig(joinpath(dir,"Class distribution $(name(events)).png"))
   end
 
-  histogram(events[psd_key], bins=bins, label="All", legendfont=diagram_font, linewidth=0)
+  histogram(events[psd_key], bins=bins, label="All ($(eventcount(events)) events)", legendfont=diagram_font, linewidth=0)
   xaxis!("Classifier response", diagram_font)
   yaxis!("Event count", diagram_font)
   savefig(joinpath(dir,"Distribution $(name(events)).png"))
 
   histogram2d(convert(Array{Float64},events[:E]),
     convert(Array{Float64},events[psd_key]),
-    nbins=100)
+    nbins=200)
+  savefig(joinpath(dir, "Energy distributions $(name(events)).png"))
+
+  e_dep_hist = fit(Histogram{Float64}, (convert(Array{Float64},events[:E]),
+    convert(Array{Float64},events[psd_key])), (linspace(1000, 3000, 101), linspace(0, 1, 51)))
+  broadcast!(x -> x <= 0 ? NaN : log10(x), e_dep_hist.weights, e_dep_hist.weights)
+  plot(e_dep_hist, color=:viridis)
+  xaxis!("Energy (keV)")
+  yaxis!("Classifier output")
+  title!("Classification vs energy (log10)")
   savefig(joinpath(dir, "Energy distributions $(name(events)).png"))
 
   histogram2d(convert(Array{Float64}, 1:length(events.labels[psd_key])), convert(Array{Float64},events.labels[psd_key]))
   savefig(joinpath(dir, "Distribution over time $(name(events)).png"))
 
-  if haskey(events.labels, :multiplicities)
+  if haskey(events.labels, :multiplicity)
     histogram2d(convert(Array{Float64},events.labels[:multiplicities]), convert(Array{Float64},events.labels[psd_key]))
     savefig(joinpath(dir, "Multiplicity correlation $(name(events)).png"))
   end
@@ -273,80 +295,70 @@ function plot_energy_histogram(eventlibs::Array{EventLibrary}, nbins, filename;
   savefig(filename)
 end
 
-function plot_peak_efficiencies_vs_cut(file, events::EventLibrary, cut_key,
-      peak_centers, peak_names;
-      cut_count=40, diagram_font=font(14))
-  cut_values = equal_counts_cut_values(events, cut_count, cut_key)
-  curves = cut_efficiency_fluctuations(calc_efficiency_curves(events, cut_key, cut_values, peak_centers))
-  amplitude_ratios = curves[:ratio]
-  cut_values = transpose(curves[:cut_value])
 
-  # Efficiencies vs Cut
-  plot()
-  for i in 1:length(peak_centers)
-    plot!(cut_values, amplitude_ratios[i,:], label=peak_names[i],
-      marker=:circle, markerstrokewidth=0.5, legendfont=diagram_font)
+export plot_efficiency_curves
+function plot_efficiency_curves(file::AbstractString, effs::EfficiencyCollection)
+  cut_values = effs.curves[1].cut_values
+
+  plot(size=(600,400), legendfont=font(16))
+  for curve in effs.curves
+    # plot!(curve.cut_values, curve.efficiencies, marker=:circle, markerstrokewidth=0.2, label=replace(string(curve.name), "_", " "))
+    plot!(curve.cut_values, curve.efficiencies, line=(3), label=replace(string(curve.name), "_", " "))
   end
-  xaxis!("Cut value", (minimum(cut_values[2:end-1])-0.01, maximum(cut_values[2:end])+0.01), diagram_font)
-  yaxis!("Efficiency", (0,1), diagram_font)
-  savefig(file)
 
-  return amplitude_ratios
+  xaxis!("Cut value", font(20))
+  yaxis!("Efficiency", (0,1), font(20))
+  savefig("$file.png")
+  savefig("$file.pdf")
+  return effs
 end
 
-function plot_efficiencies(dir, libs::Array{EventLibrary}, cut_key;
-    diagram_font=font(10), plot_AoE=false, plot_guess=true)
-  # hist_animation = @animate for i in 1:length(cut_values)
-  #   cut = cut_values[i]
-  #   plot_energy_histogram(dir*"PSD-energies-cut$(@sprintf("%.3f",cut)).png", events[:energies], accept, cut)
-  # end
-  # gif(hist_animation, dir*"PSD-energies-animation.gif", fps=3)
 
-  peak_centers = [1592.5, 1620.7, 2103.5, 2614.5]
-  peak_names = ["Tl DEP", "Bi FEP", "Tl SEP", "Tl FEP"]
+export plot_efficiencies
+function plot_efficiencies(file::AbstractString, effs::EfficiencyCollection...)
+  plot(size=(700, 600), legendfont=font(16), legend=:bottomleft)
 
-  ratios = [plot_peak_efficiencies_vs_cut(joinpath(dir,"PSD Efficiencies vs Cut $(name(lib)).png"),
-    lib, cut_key, peak_centers, peak_names) for lib in libs]
-
-  # Background rejection vs Signal efficiency
-  plot(legendfont=diagram_font, legend=:bottomleft)
-  for (i,lib) in enumerate(libs)
-    classifier_label = join(get_classifiers(lib), " + ")
-    linetype = :line
-    if startswith(name(lib), "train")
-      classifier_label = classifier_label * " (training set)"
-      linetype = :dash
+  for eff in effs
+    if length(eff.curves[1].cut_values) <= 2
+      plot!(roc_curve(eff), label=eff.title, line=(:dash, :grey, 2))
+    else
+      plot!(roc_curve(eff), label=eff.title, linewidth=4)
     end
-    ratios[i] = hcat(fill(0, size(ratios[i],1)), ratios[i], fill(1, size(ratios[i],1)) )
-    plot!(ratios[i][1,:], 1-ratios[i][2,:],
-        line=(2,linetype), label=classifier_label)
   end
-  if plot_AoE
-    plot!(get_AoE_efficiencies()[:,1], 1-get_AoE_efficiencies()[:,2],
-        linewidth=2, label="A/E")
-  end
-  if plot_guess
-    plot!([0,1],[1,0], linewidth=1, label="Random guessing")
-  end
-  xaxis!("Signal efficiency", (0.2,1), diagram_font)
-  yaxis!("Background rejection", (0,1), diagram_font)
-  savefig(joinpath(dir,"PSD Efficiency comparison.png"))
+  xaxis!("Signal efficiency", (0.6,1), font(20))
+  yaxis!("Background rejection", (0,1), font(20))
+  savefig("$file.png")
+  savefig("$file.pdf")
+  return effs
 end
 
-function get_AoE_efficiencies()
-  file = open("/home/iwsatlas1/pholl/workspace/data/AoE_Performance.txt", "r")
-  data = readdlm(file)
-  return data
-end
 
 export plot_classifier
-function plot_classifier(env::DLEnv, name, libs::EventLibrary...;
+function plot_classifier(env::DLEnv, dirname::AbstractString, libs::EventLibrary...;
     classifier_key=:psd, label_key=:SSE, plot_AoE=false)
-  dir = joinpath(env.dir, "plots", "PSD")
+  dir = joinpath(env.dir, "plots", dirname)
   isdir(dir) || mkdir(dir)
 
   for lib in libs
     plot_classifier_histogram(dir, lib, label_key, classifier_key)
   end
-  plot_efficiencies(dir, collect(libs), classifier_key; plot_AoE=plot_AoE)
+
+  peak_effs = [get_peak_efficiencies(env, lib, lib[:detector_name], join(get_classifiers(lib), " + ")) for lib in libs]
+  current_curve = load_current_effs(libs[1][:detector_name])
+
+  for (i,lib) in enumerate(libs)
+    plot_efficiency_curves(joinpath(dir, "PSD Efficiencies vs Cut $(name(lib))"), peak_effs[i])
+  end
+  if current_curve != nothing
+    plot_efficiency_curves(joinpath(dir, "PSD Efficiencies vs Cut current"), current_curve)
+  end
+
+  curves = EfficiencyCollection[]
+  if current_curve != nothing
+    push!(curves, current_curve)
+  end
+  append!(curves, peak_effs)
+  push!(curves, random_guessing())
+
+  plot_efficiencies(joinpath(dir, "PSD Efficiency comparison"), curves...)
 end
