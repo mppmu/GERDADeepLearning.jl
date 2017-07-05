@@ -86,6 +86,24 @@ function Base.haskey(env::DLEnv, key::String)
 end
 
 
+export detectors
+function detectors(env::DLEnv, dettype::AbstractString)
+  if dettype == "BEGe"
+    return BEGes_GERDA_II()
+  elseif dettype == "coax" || dettype == "semi-coaxial"
+    return Coax_GERDA_II()
+  elseif dettype == "natural"
+    return Natural_GERDA_II()
+  else
+    throw(ArgumentError("Unknown detector type: $dettype"))
+  end
+end
+
+function detectors(env::DLEnv)
+  return phase2_detectors
+end
+
+
 export _create_h5data
 function _create_h5data(env::DLEnv, raw_dir)
   info(env, 2, "Reading original data from $(env.config["path"])")

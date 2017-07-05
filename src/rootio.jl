@@ -5,7 +5,7 @@ using ROOTFramework, Cxx, MGDO, Base.Threads, MultiThreadingTools, HDF5
 
 function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, keylists::Vector{KeyList}; sample_size=1000, verbosity=2)
 
-  label_keys = [:keylist=>Int8, :E=>Float32, :AoE=>Float32, :AoE_class=>Int8, :isTP=>Int8, :isBL=>Int8, :multiplicity=>Int32, :isMuVetoed=>Int8, :isLArVetoed=>Int8]
+  label_keys = [:keylist=>Int8, :timestamp=>UInt64, :E=>Float32, :AoE=>Float32, :AoE_class=>Int8, :ANN_mse_class=>Int8, :ANN_alpha_class=>Int8, :isTP=>Int8, :isBL=>Int8, :multiplicity=>Int32, :isMuVetoed=>Int8, :isLArVetoed=>Int8]
 
   # Create HDF5 extendible storage
   h5files, h5_arrays = create_extendible_hdf5_files(output_dir, keylists, phase2_detectors, sample_size, 256, label_keys)
@@ -52,22 +52,27 @@ end
 function read_single_thread_single_file(detector_names, file1, file4, label_keys, verbosity, sample_size, keylist_id, is_physics_data::Bool)
   # Create thread-local arrays
   tier4_bindings = TTreeBindings()
+  branch_timestamp = tier4_bindings[:timestamp] = Ref(zero(UInt64))
   branch_energies = tier4_bindings[:energy] = zeros(Float64, 0)
   branch_event_ch = tier4_bindings[:eventChannelNumber] = Ref(zero(Int32))
   # branch_timestamp = tier4_bindings[:timestamp] = Ref(zero(UInt64))
-  branch_aoeVeto = tier4_bindings[:psdFlag_AoE] = zeros(Int32, 0)
-  branch_aoeEval = tier4_bindings[:psdIsEval_AoE] = Bool[]
+  branch_aoeVeto = tier4_bindings[:psdFlag_AoverE_eNorm] = zeros(Int32, 0)
+  branch_aoeEval = tier4_bindings[:psdIsEval_AoverE_eNorm] = Bool[]
   branch_aoeVal = tier4_bindings[:psdClassifier_AoE] = zeros(Float64, 0)
   branch_isTP = tier4_bindings[:isTP] = Ref(zero(Int32))
   branch_isBL = tier4_bindings[:isBL] = Ref(zero(Int32))
   branch_multiplicity = tier4_bindings[:multiplicity] = Ref(zero(Int32))
   branch_isMuVetoed = tier4_bindings[:isMuVetoed] = Ref(zero(Int32))
+  branch_ANN_mse_eval = tier4_bindings[:psdIsEval_ANN_mse] = Bool[]
+  branch_ANN_mse_flag = tier4_bindings[:psdFlag_ANN_mse] = zeros(Int32, 0)
+  branch_ANN_alpha_eval = tier4_bindings[:psdIsEval_ANN_alpha] = Bool[]
+  branch_ANN_alpha_flag = tier4_bindings[:psdFlag_ANN_alpha] = zeros(Int32, 0)
   if is_physics_data
     branch_isLArVetoed = tier4_bindings[:isLArVetoed] = Ref(zero(Int32))
   end
 
   # Prepare tables
-  result, keylist, E, AoE, AoE_class, isTP, isBL, multiplicity, isMuVetoed, isLArVetoed = create_label_arrays(label_keys, length(detector_names))
+  result, keylist, timestamp, E, AoE, AoE_class, ANN_mse_class, ANN_alpha_class, isTP, isBL, multiplicity, isMuVetoed, isLArVetoed = create_label_arrays(label_keys, length(detector_names))
   waveforms = [Vector{Float32}[] for i in 1:length(detector_names)]
   result[:waveforms] = waveforms
 
@@ -89,13 +94,9 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
           push!(waveforms[detector], convert(Array{Float32}, t1_evt.aux_waveforms.samples[no_in_event]))
 
           push!(keylist[detector], keylist_id)
+          push!(timestamp[detector], branch_timestamp.x)
           push!(E[detector], branch_energies[detector])
-          push!(AoE[detector], branch_aoeVal[detector])
-          if branch_aoeEval[detector]
-              push!(AoE_class[detector], branch_aoeVeto[detector])
-          else
-              push!(AoE_class[detector], -1)
-          end
+
           push!(isTP[detector], branch_isTP.x)
           push!(isBL[detector], branch_isBL.x)
           push!(multiplicity[detector], branch_multiplicity.x)
@@ -105,6 +106,27 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
           else
             push!(isLArVetoed, 0)
           end
+
+          # A/E
+          push!(AoE[detector], branch_aoeVal[detector])
+          if branch_aoeEval[detector]
+              push!(AoE_class[detector], branch_aoeVeto[detector])
+          else
+              push!(AoE_class[detector], -1)
+          end
+          # ANN - MSE
+          if branch_ANN_mse_eval[detector]
+            push!(ANN_mse_class[detector], branch_ANN_mse_flag[detector])
+          else
+            push!(ANN_mse_class[detector], -1)
+          end
+          # ANN - Alpha
+          if branch_ANN_alpha_eval[detector]
+            push!(ANN_alpha_class[detector], branch_ANN_alpha_flag[detector])
+          else
+            push!(ANN_alpha_class[detector], -1)
+          end
+
         end # for
       end # for
     end # open

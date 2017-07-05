@@ -214,7 +214,7 @@ function check_nan(lib::EventLibrary)
   wf = waveforms(lib)
   nan_indices = find(x->isnan(x), wf)
   if length(nan_indices) > 0
-    raise(NaNError("At indices $nan_indices"))
+    throw(NaNError("At indices $nan_indices"))
   end
 end
 check_nan(data::DLData) = for lib in data check_nan(lib) end
