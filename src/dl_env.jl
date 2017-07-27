@@ -94,6 +94,8 @@ function detectors(env::DLEnv, dettype::AbstractString)
     return Coax_GERDA_II()
   elseif dettype == "natural"
     return Natural_GERDA_II()
+  elseif dettype == "used"
+    return vcat(BEGes_GERDA_II(), Coax_GERDA_II())
   else
     throw(ArgumentError("Unknown detector type: $dettype"))
   end

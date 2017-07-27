@@ -146,7 +146,9 @@ function encode(events::EventLibrary, n::NetworkInfo; log=false)
   result = copy(events)
 
   if eventcount(events) > 0
-    provider = mx.ArrayDataProvider(:data => events.waveforms, batch_size=min(n["batch_size"], eventcount(events)))
+        println(eventcount(events))
+        println(size(waveforms(events),2))
+    provider = mx.ArrayDataProvider(:data => waveforms(events), batch_size=min(n["batch_size"], eventcount(events)))
     transformed = mx.predict(model, provider)
     result.waveforms = transformed
   else

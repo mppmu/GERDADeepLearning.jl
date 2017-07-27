@@ -104,7 +104,7 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
           if is_physics_data
             push!(isLArVetoed[detector], branch_isLArVetoed.x)
           else
-            push!(isLArVetoed, 0)
+            push!(isLArVetoed[detector], 0)
           end
 
           # A/E

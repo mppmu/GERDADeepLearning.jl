@@ -80,6 +80,7 @@ function lazy_read_library(h5_filepath, libname)
     value = read(attrs(props)[key])
     lib.prop[Symbol(key)] = value
   end
+  lib.prop[:eventcount] = size(libroot["waveforms"], 2)
   # TODO keylists
 
   close(ifile)

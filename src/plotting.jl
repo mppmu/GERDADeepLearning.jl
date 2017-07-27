@@ -225,6 +225,7 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
 
   bins = linspace(minimum(events.labels[psd_key]), maximum(events.labels[psd_key]), nbins)
 
+    # Labeled distribution
   if haskey(events, label_key)
     labels = events[label_key]
     psd = events[psd_key]
@@ -240,16 +241,13 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
     savefig(joinpath(dir,"Class distribution $(name(events)).png"))
   end
 
+    # Total distribution
   histogram(events[psd_key], bins=bins, label="All ($(eventcount(events)) events)", legendfont=diagram_font, linewidth=0)
   xaxis!("Classifier response", diagram_font)
   yaxis!("Event count", diagram_font)
   savefig(joinpath(dir,"Distribution $(name(events)).png"))
 
-  histogram2d(convert(Array{Float64},events[:E]),
-    convert(Array{Float64},events[psd_key]),
-    nbins=200)
-  savefig(joinpath(dir, "Energy distributions $(name(events)).png"))
-
+    # Energy dependence
   e_dep_hist = fit(Histogram{Float64}, (convert(Array{Float64},events[:E]),
     convert(Array{Float64},events[psd_key])), (linspace(1000, 3000, 101), linspace(0, 1, 51)))
   broadcast!(x -> x <= 0 ? NaN : log10(x), e_dep_hist.weights, e_dep_hist.weights)
@@ -259,11 +257,21 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
   title!("Classification vs energy (log10)")
   savefig(joinpath(dir, "Energy distributions $(name(events)).png"))
 
-  histogram2d(convert(Array{Float64}, 1:length(events.labels[psd_key])), convert(Array{Float64},events.labels[psd_key]))
-  savefig(joinpath(dir, "Distribution over time $(name(events)).png"))
+    # Time dependence
+    events_sorted = sort(events, :timestamp)
+  histogram2d(convert(Array{Float64}, 1:length(events_sorted[psd_key]))/1000, convert(Array{Float64},events_sorted[psd_key]))
+    xaxis!("Entries (1000)", font(16))
+    yaxis!("Classification", font(16))
+    title!("Time stability of $(events[:detector_name])", titlefont=font(16))
+  savefig(joinpath(dir, "Distribution over time $(name(events)) entries.png"))
+  histogram2d(convert(Array{Float64}, (events_sorted[:timestamp]-events_sorted[:timestamp][1])/60/60/24), convert(Array{Float64},events_sorted[psd_key]))
+    xaxis!("Time (days)", font(16))
+    yaxis!("Classification", font(16))
+    title!("Time stability of $(events[:detector_name])", titlefont=font(16))
+  savefig(joinpath(dir, "Distribution over time $(name(events)) millis.png"))
 
   if haskey(events.labels, :multiplicity)
-    histogram2d(convert(Array{Float64},events.labels[:multiplicities]), convert(Array{Float64},events.labels[psd_key]))
+    histogram2d(convert(Array{Float64},events.labels[:multiplicity]), convert(Array{Float64},events.labels[psd_key]))
     savefig(joinpath(dir, "Multiplicity correlation $(name(events)).png"))
   end
 

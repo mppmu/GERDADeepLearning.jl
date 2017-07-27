@@ -16,14 +16,14 @@ type EventLibrary <: EventCollection
   initialization_function::Union{Function,Void}
 
   waveforms::Array{Float32, 2}
-  labels::Dict{Symbol,Vector{Float32}} # same length as waveforms
+  labels::Dict{Symbol,Vector} # same length as waveforms
   prop::Dict{Symbol,Any}
 
-  EventLibrary(init::Function) = new(init, zeros(Float32, 0,0), Dict{Symbol,Vector{Float32}}(), Dict{Symbol,Any}())
+  EventLibrary(init::Function) = new(init, zeros(Float32, 0,0), Dict{Symbol,Vector}(), Dict{Symbol,Any}())
 
   EventLibrary(waveforms::Matrix{Float64}) = EventLibrary(convert(Matrix{Float32}, waveforms))
 
-  EventLibrary(waveforms::Matrix{Float32}) = new(nothing, waveforms, Dict{Symbol,Vector{Float32}}(), Dict{Symbol,Any}())
+  EventLibrary(waveforms::Matrix{Float32}) = new(nothing, waveforms, Dict{Symbol,Vector}(), Dict{Symbol,Any}())
 end
 
 export DLData
@@ -116,6 +116,7 @@ function filter(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
   else
     result = copy(lib) # shallow copy
     result.initialization_function = lib2 -> _set_shallow(lib2, filter(initialize(lib), predicate_key, predicate))
+    delete!(result.prop, :eventcount)
     return result
   end
 end
@@ -142,7 +143,6 @@ function Base.filter!(lib::EventLibrary, predicate_key::Symbol, predicate::Funct
     for label in keys(lib.labels)
       lib.labels[label] = lib.labels[label][indices]
     end
-    return lib
   else
     prev_initialization = lib.initialization_function
     lib.initialization_function = lib2 -> begin
@@ -150,8 +150,9 @@ function Base.filter!(lib::EventLibrary, predicate_key::Symbol, predicate::Funct
       prev_initialization(lib2)
       filter!(lib2, predicate_key, predicate)
     end
-    return lib
   end
+  delete!(lib.prop, :eventcount)
+  return lib
 end
 
 function Base.filter!(data::DLData, predicate_key::Symbol, predicate::Function)
@@ -202,6 +203,7 @@ function getindex(events::EventLibrary, selection)
   for (key,value) in events.prop
     result.prop[key] = value
   end
+  delete!(result.prop, :eventcount)
   return result
 end
 
@@ -213,8 +215,18 @@ function getindex{T<:Union{AbstractString,Number}}(events::EventCollection, pred
 end
 
 export eventcount
-eventcount(events::EventLibrary) = size(initialize(events).waveforms, 2)
-eventcount(data::DLData) = sum([eventcount(lib) for lib in data])
+function eventcount(events::EventLibrary)
+    if size(events.waveforms, 2) > 0
+        return size(events.waveforms, 2)
+    elseif haskey(events, :eventcount)
+        return events[:eventcount]
+    else
+        return size(initialize(events).waveforms, 2)
+    end
+end
+function eventcount(data::DLData)
+    return sum([eventcount(lib) for lib in data.entries])
+end
 
 Base.haskey(events::EventLibrary, key::Symbol) = haskey(events.labels, key) || haskey(events.prop, key)
 Base.haskey(data::DLData, key::Symbol) = length(data) > 0 && haskey(data.entries[1])
@@ -345,8 +357,16 @@ function cat_events(libs::EventLibrary...)
       result.prop[key] = values[1]
     end
   end
+    delete!(result.prop, :eventcount)
   return result
 end
+
+
+function Base.sort(lib::EventLibrary, labelkey::Symbol)
+    p = sortperm(lib[labelkey])
+    return lib[p]
+end
+
 
 
 function Base.split(data::DLData, datasets::Dict{AbstractString,Vector{AbstractFloat}})
@@ -453,7 +473,7 @@ end
 
 
 export put_label!
-function put_label!(events::EventLibrary, label_name::Symbol, data::Vector{Float32})
+function put_label!(events::EventLibrary, label_name::Symbol, data::Vector)
   @assert length(data) == eventcount(events)
   events.labels[label_name] = data
 end
