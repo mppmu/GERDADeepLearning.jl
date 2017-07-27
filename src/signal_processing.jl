@@ -195,14 +195,14 @@ function differentiate(events::EventLibrary)
 end
 
 
-function Base.scale(lib::EventLibrary, val::Number)
+export scale_waveforms
+function scale_waveforms(lib::EventLibrary, val::Number)
   lib = copy(initialize(lib))
   lib.waveforms = lib.waveforms * val
   return lib
 end
-
-function Base.scale(data::DLData, val::Number)
-  return DLData([scale(lib, val) for lib in data])
+function scale_waveforms(data::DLData, val::Number)
+  return DLData([scale_waveforms(lib, val) for lib in data])
 end
 
 type NaNError <: Exception
