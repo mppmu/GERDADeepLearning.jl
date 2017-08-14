@@ -2,6 +2,7 @@
 
 using MXNet, Plots, StatsBase
 
+pyplot() # workaround for Julia 0.6 Plots.jl bug
 
 function plot_learning_curves(n::NetworkInfo, filename; from_zero::Bool=false)
   train = n.training_curve
