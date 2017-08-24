@@ -82,6 +82,12 @@ function lazy_read_library(h5_filepath, libname)
   end
   lib.prop[:eventcount] = size(libroot["waveforms"], 2)
   # TODO keylists
+                    
+  # Initialize label names
+  labels = libroot["labels"]
+  for key in names(labels)
+    lib.labels[Symbol(key)] = zeros(Float32, 0)
+  end
 
   close(ifile)
 

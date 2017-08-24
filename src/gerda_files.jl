@@ -82,7 +82,7 @@ end
 
 export parse_detectors
 function parse_detectors(list::Vector)
-  return [(isa(det,Integer) ? det : get_detector_index(det)) for det in list]
+  return [(isa(det,Integer) ? phase2_detectors[det+1] : det) for det in list]
 end
 
 

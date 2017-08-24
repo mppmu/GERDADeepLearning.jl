@@ -4,9 +4,8 @@ using DSP, MultiThreadingTools
 
 
 export preprocess_transform
-function preprocess_transform(env::DLEnv, lib::EventLibrary; steps_name="preprocessing", copyf=deepcopy)
+function preprocess_transform(env::DLEnv, lib::EventLibrary, steps::Vector{String}; copyf=deepcopy)
   initialize(lib)
-  steps = convert(Array{String}, env.config[steps_name])
   result = copyf(lib)
   setname!(result, name(lib)*"_preprocessed")
   put_label!(result, :FailedPreprocessing, zeros(Float32, eventcount(lib)))
@@ -14,7 +13,7 @@ function preprocess_transform(env::DLEnv, lib::EventLibrary; steps_name="preproc
 
   # perform the steps
   for (i,step) in enumerate(steps)
-    info(env, 3, "Preprocesing $step...")
+    info(env, 3, "Preprocesing $step on $(eventcount(result)) events...")
     pfunction = eval(parse(step))
     result = pfunction(result)
   end
@@ -87,10 +86,19 @@ function baseline(events::EventLibrary)
   bl_size = Int64(round(sample_size(events) / 5))
   weights = hamming(bl_size)
   weights /= sum(weights)
+
+  bl_levels = zeros(eventcount(events))
+  bl_std = zeros(eventcount(events))
+
   @everythread for i in threadpartition(1:eventcount(events))
     bl_level = dot(events.waveforms[1:bl_size, i], weights)
+    bl_levels[i] = bl_level
     events.waveforms[:, i] -= bl_level
+    bl_std[i] = std(events.waveforms[1:bl_size, i])
   end
+
+  put_label!(events, :baseline_level, bl_levels)
+  put_label!(events, :baseline_std, bl_std)
   return events
 end
 
@@ -130,12 +138,27 @@ function align_midpoints(events::EventLibrary; center_y=0.5, target_length=256)
   rwf = zeros(Float32, target_length, eventcount(events))
 
   @everythread for i in threadpartition(1:eventcount(events))
-    index = findmin(abs(charges.waveforms[:,i] - center_y))[2]
+    index = findmin(abs.(charges.waveforms[:,i] - center_y))[2]
     if (index < half) || (index > s - half)
       events[:FailedPreprocessing][i] = 1
     else
       rwf[:,i] = events.waveforms[(index-half+1) : (index+half) , i]
     end
+  end
+
+  events.waveforms = rwf
+
+  return events
+end
+
+export extract_noise
+function extract_noise(events::EventLibrary; target_length=256)
+  s = sample_size(events)
+  rwf = zeros(Float32, target_length, eventcount(events))
+
+  @everythread for i in threadpartition(1:eventcount(events))
+    rwf[:,i] = events.waveforms[(s-target_length+1):s , i]
+    rwf[:,i] -= mean(rwf[:,i])
   end
 
   events.waveforms = rwf
@@ -151,15 +174,21 @@ function normalize_energy(events::EventLibrary; value=1)
   weights = hamming(top_size)
   weights /= sum(weights)
 
+  top_levels = zeros(Float32, eventcount(events))
+
   @everythread for i in threadpartition(1:eventcount(events))
     top_level = dot(charges.waveforms[(end-top_size+1) : end, i], weights)
+    top_levels[i] = top_level
     events.waveforms[:,i] *= value / top_level
   end
+
+  put_label!(events, :top_level, top_levels)
   return events
 end
 
 export integrate
 function integrate(events::EventLibrary)
+    events = initialize(events)
   @everythread for i in threadpartition(1:eventcount(events))
     events.waveforms[:,i] = integrate_array(events.waveforms[:,i])
   end
@@ -183,6 +212,7 @@ end
 
 export differentiate
 function differentiate(events::EventLibrary)
+    events = initialize(events)
   @everythread for i in threadpartition(1:eventcount(events))
       events.waveforms[:,i] = gradient(events.waveforms[:,i])
   end

@@ -9,6 +9,9 @@ using Compat
 @compat abstract type EventCollection
 end
 
+type NoSuchEventException <: Exception
+end
+
 export EventLibrary
 type EventLibrary <: EventCollection
   # EventLibraries can be lazily initialized.
@@ -38,6 +41,18 @@ type DLData <: EventCollection
     new(entries, nothing)
   end
 end
+
+export no_events
+no_events() = DLData(EventLibrary[])
+
+function Base.cat(libs::Vector{EventLibrary})
+    if length(libs) == 1
+        return libs[1]
+    end
+    return DLData(libs)
+end
+Base.cat(libs::EventLibrary...) = cat([lib for lib in libs])
+
 
 
 function _set_shallow(lib::EventLibrary, from::EventLibrary)
@@ -79,13 +94,14 @@ Base.length(data::DLData) = length(data.entries)
 export flatten
 function flatten(data::DLData)
   if length(data.entries) == 0
-    return nothing
+    return data
   end
   if length(data.entries) == 1
     return data.entries[1]
   end
   return cat_events(data.entries...)
 end
+flatten(lib::EventLibrary) = lib
 
 export waveforms
 waveforms(lib::EventLibrary) = initialize(lib).waveforms
@@ -103,6 +119,8 @@ export sample_size
 sample_size(lib::EventLibrary) = size(initialize(lib).waveforms, 1)
 sample_size(data::DLData) = sample_size(data.entries[1])
 
+export sample_times
+sample_times(events::EventCollection) = linspace(0, (sample_size(events)-1)*sampling_period(events), sample_size(events))
 
 export filter
 
@@ -125,6 +143,9 @@ function filter(data::DLData, predicate_key::Symbol, predicate::Function)
   if hasproperty(data, predicate_key)
     # Filter list of datasets
     filtered_indices = find(lib -> predicate(lib.prop[predicate_key]), data.entries)
+    if length(filtered_indices) == 1
+        return data.entries[filtered_indices[1]]
+    end
     return DLData(data.entries[filtered_indices])
   else
     # Filter individual datasets
@@ -137,6 +158,20 @@ Base.filter!(lib::EventCollection, key::Symbol, value::Union{AbstractString,Numb
 Base.filter!{T<:Union{AbstractString,Number}}(lib::EventCollection, key::Symbol, values::Vector{T}) = filter!(lib, key, x -> x in values)
 
 function Base.filter!(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
+    # First check whether it's a property
+  if haskey(lib.prop, predicate_key)
+        propval = lib.prop[predicate_key]
+        if !predicate(propval)
+            lib.waveforms = zeros(Float32, 0, 0)
+            lib.initialization_function = nothing
+            for label in keys(lib.labels)
+              lib.labels[label] = zeros(Float32, 0)
+            end
+        end
+        return lib
+    end
+
+    # Else it has to be a label
   if is_initialized(lib)
     indices = find(predicate, lib.labels[predicate_key])
     lib.waveforms = lib.waveforms[:,indices]
@@ -206,6 +241,7 @@ function getindex(events::EventLibrary, selection)
   delete!(result.prop, :eventcount)
   return result
 end
+getindex(data::DLData, selection::Union{UnitRange,Integer}) = flatten(data)[selection]
 
 function getindex{T<:Union{AbstractString,Number}}(events::EventCollection, predicates::Pair{Symbol,T}...)
   for predicate in predicates
@@ -225,6 +261,9 @@ function eventcount(events::EventLibrary)
     end
 end
 function eventcount(data::DLData)
+    if length(data.entries) == 0
+        return 0
+    end
     return sum([eventcount(lib) for lib in data.entries])
 end
 
@@ -256,11 +295,12 @@ end
 export deepcopy
 function deepcopy(events::EventLibrary)
   result = EventLibrary(copy(events.waveforms))
+  result.initialization_function = events.initialization_function
   for (key, value) in events.labels
     result.labels[key] = copy(value)
   end
   for (key,value) in events.prop
-    result.prop[key] = copy(value)
+    result.prop[key] = deepcopy(value)
   end
   return result
 end
@@ -340,7 +380,7 @@ function cat_events(libs::EventLibrary...)
 
   # Cat waveforms
   if length(nonempty) > 0
-    result.waveforms = hcat([lib.waveforms for lib in libs[nonempty]]...)
+    result.waveforms = hcat([waveforms(lib) for lib in libs[nonempty]]...) # this initializes the entries
     # Cat labels
     for key in keys(libs[1].labels)
       result.labels[key] = vcat([lib.labels[key] for lib in libs[nonempty]]...)
@@ -401,7 +441,7 @@ function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{Abs
   for keylist_id in 1:kl_count
     keylist_indices = find(x->x==keylist_id, keylist_ids)
     N = length(keylist_indices)
-    index_perm = randperm(N)
+    index_perm = randperm(MersenneTwister(0), N)
 
     depleted_fraction = 0.0
     # split shuffled indices into data sets
@@ -477,3 +517,59 @@ function put_label!(events::EventLibrary, label_name::Symbol, data::Vector)
   @assert length(data) == eventcount(events)
   events.labels[label_name] = data
 end
+
+
+function Base.keys(lib::EventLibrary)
+    return vcat(collect(keys(lib.labels)), collect(keys(lib.prop)))
+end
+function Base.keys(data::DLData)
+    if length(data.entries) == 0
+        return Symbol[]
+    else
+        return keys(data.entries[1])
+    end
+end
+
+
+export detectors
+function detectors(data::DLData)
+    return unique([lib[:detector_name] for lib in data])
+end
+detectors(lib::EventLibrary) = [lib[:detector_name]]
+
+
+
+
+export SSE_at
+function SSE_at(lib::EventLibrary, energy::Real)
+    if startswith(lib[:detector_name], "GD")
+        SSE_indices = find(AoE->(AoE>0.98)&&(AoE<1.02), lib[:AoE])
+    else
+        SSE_indices = find(c->c==0, lib[:ANN_mse_class])
+    end
+    sorted_indices = sortperm(abs.(lib[:E].-2038))
+    for idx in sorted_indices
+        if idx in SSE_indices
+            return idx
+        end
+    end
+    throw(NoSuchEventException())
+end
+SSE_at(data::DLData, energy::Real) = SSE_at(flatten(data), energy)
+
+export MSE_at
+function MSE_at(lib::EventLibrary, energy::Real)
+    if startswith(lib[:detector_name], "GD")
+        MSE_indices = find(AoE->AoE<0.7, lib[:AoE])
+    else
+        MSE_indices = find(c->c==1, lib[:ANN_mse_class])
+    end
+    sorted_indices = sortperm(abs.(lib[:E].-2038))
+    for idx in sorted_indices
+        if idx in MSE_indices
+            return idx
+        end
+    end
+    throw(NoSuchEventException())
+end
+MSE_at(data::DLData, energy::Real) = MSE_at(flatten(data), energy)

@@ -121,21 +121,21 @@ function _create_h5data(env::DLEnv, raw_dir)
 end
 
 export getdata
-function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[])
-  if !preprocessed
+function getdata(env::DLEnv; preprocessing::Union{AbstractString,Void}=nothing, targets::Array{String}=String[])
+  if preprocessing==nothing
     return get(env, "raw"; targets=targets) do
       _get_raw_data(env; targets=targets)
     end
   else
-    data = _get_raw_data(env; targets=["preprocessed"])
-    preprocessed = get(env, "preprocessed"; targets=targets) do
-      preprocess(env, data)
+    data = _get_raw_data(env; targets=[preprocessing])
+    preprocessed = get(env, preprocessing; targets=targets) do
+      preprocess(env, data, preprocessing)
     end
     if preprocessed == nothing
       return nothing
     end
     # Else check whether cache is up to date
-    steps = env.config["preprocessing"]
+    steps = get_properties(env, preprocessing)["preprocessing"]
     cache_up_to_date = true
     for lib in preprocessed
       cached_steps = lib[:preprocessing]
@@ -147,8 +147,8 @@ function getdata(env::DLEnv; preprocessed=false, targets::Array{String}=String[]
       return preprocessed
     else
       info(env, 2, "Refreshing cache of 'preprocessed'.")
-      delete!(env, "preprocessed")
-      return getdata(env; preprocessed=true, targets=targets)
+      delete!(env, preprocessing)
+      return getdata(env; preprocessing=preprocessing, targets=targets)
     end
   end
 end
@@ -163,25 +163,32 @@ end
 
 
 export preprocess
-function preprocess(env::DLEnv, data::DLData)
-  select_channels=parse_detectors(env["detectors"])
+function preprocess(env::DLEnv, data::DLData, config_name)
+  config = get_properties(env, config_name)
+
+  select_channels=parse_detectors(config["detectors"])
+  info(env, 3, "Selected channels: $select_channels")
   if isa(select_channels,Vector) && length(select_channels) > 0
-    filter!(data, :detector_id, select_channels)
+    filter!(data, :detector_name, select_channels)
   end
 
-  _builtin_filter(env, "test-pulses", data, :isTP, isTP -> isTP == 0)
-  _builtin_filter(env, "baseline-events", data, :isBL, isBL -> isBL == 0)
-  _builtin_filter(env, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
+  _builtin_filter(env, config, "test-pulses", data, :isTP, isTP -> isTP == 0)
+  _builtin_filter(env, config, "baseline-events", data, :isBL, isBL -> isBL == 0)
+  _builtin_filter(env, config, "unphysical-events", data, :E, E -> (E > 0) && (E < 9999))
+  _builtin_filter(env, config, "low-energy-events", data, :E, E -> (E > 0) && (E < 1000))
 
-  N_dset = length(parse_datasets(env))
+  N_dset = length(parse_datasets(env, config["sets"]))
   result = DLData(fill(EventLibrary(zeros(0,0)), length(data)*N_dset))
-  result.dir = _cachedir(env, "tmp-preprocessed")
+  result.dir = _cachedir(env, "tmp-preprocessed-$config_name")
+
+  steps = convert(Array{String}, config["preprocessing"])
 
   for i in 1:length(data)
     lib = data.entries[i]
     info(env,2, "Preprocessing $(name(lib))")
-    lib_t = preprocess_transform(env, lib; copyf=identity)
-    part_data = DLData(collect(values(split(env, lib_t))))
+    lib_t = preprocess_transform(env, lib, steps; copyf=identity)
+    _builtin_filter(env, config, "failed-preprocessing", lib_t, :FailedPreprocessing, fail -> fail == 0)
+    part_data = DLData(collect(values(split(env, lib_t, config["sets"]))))
     write_all_sequentially(part_data, result.dir, true)
     info(env,3, "Wrote datasets of $(name(lib)) and released allocated memory.")
     dispose(lib)
@@ -196,13 +203,12 @@ function preprocess(env::DLEnv, data::DLData)
 end
 
 
-function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exclude_prededicate)
+function _builtin_filter(env::DLEnv, config::Dict, ftype_key::String, data::EventCollection, label, exclude_prededicate)
   # TODO per detector to save memory
-  ftype = env.config[ftype_key]
+  ftype = config[ftype_key]
+  info(env, 3, "Filter $ftype_key is set to $ftype.")
   if ftype == "exclude"
-    # before = eventcount(data) # This cannot be done lazily
     result = filter!(data, label, exclude_prededicate)
-    # info(env, 2, "Excluded $(before-(eventcount(result))) $ftype_key of $before events.")
     return result
   elseif ftype == "include"
     return data
@@ -214,9 +220,8 @@ function _builtin_filter(env::DLEnv, ftype_key::String, data::DLData, label, exc
 end
 
 
-function parse_datasets(env::DLEnv)
+function parse_datasets(env::DLEnv, strdict::Dict)
   result = Dict{AbstractString,Vector{AbstractFloat}}()
-  strdict = get_properties(env, "sets")
   requiredlength = length(env["keylists"])
   for (key,value) in strdict
     if isa(value, Vector)
@@ -231,7 +236,7 @@ function parse_datasets(env::DLEnv)
   return result
 end
 
-Base.split(env::DLEnv, data::EventCollection) = split(data, parse_datasets(env))
+Base.split(env::DLEnv, data::EventCollection, strdict::Dict) = split(data, parse_datasets(env, strdict))
 
 
 function setup(env::DLEnv)
@@ -275,6 +280,8 @@ function get(env::DLEnv, lib_name::String)
   _ensure_ext_loaded(env, lib_name)
   return env._ext_event_libs[lib_name]
 end
+
+Base.push!(env::DLEnv, lib_name::String, lib::EventLibrary; uninitialize::Bool=false) = push!(env, lib_name, DLData([lib]); uninitialize=uninitialize)
 
 function Base.push!(env::DLEnv, lib_name::String, data::DLData; uninitialize::Bool=false)
   _ensure_ext_loaded(env, lib_name)

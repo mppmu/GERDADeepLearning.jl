@@ -1,8 +1,72 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using MXNet, Plots, StatsBase
+using MXNet, Plots, StatsBase, LaTeXStrings
 
 pyplot() # workaround for Julia 0.6 Plots.jl bug
+
+
+export plot_waveforms
+"""
+Plots a number of waveforms from the given EventLibrary in a single diagram. The figure is saved in the given environment using the name of the library.
+"""
+function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16), evt_indices=nothing)
+  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
+  info(env, 2, "Plotting waveforms to $filepath")
+
+  if evt_indices == nothing
+    count = min(count, eventcount(events))
+    data = waveforms(events)[:,1:count]
+  else
+    data = waveforms(events)[:, evt_indices]
+  end
+
+  if cut != nothing
+    data = data[cut,:]
+  end
+
+  x_axis = linspace(0, (size(data,1)-1)*bin_width_ns, size(data,1))
+  plot(size=(600, 400), legend=:none)
+  for i in 1:size(data, 2)
+    plot!(x_axis, data[:,i], linewidth=3)
+  end
+  xaxis!("Time (ns)", diagram_font)
+  yaxis!("Current pulse", diagram_font)
+  savefig(filepath)
+
+  return events
+end
+
+"""
+For each EventLibrary, a number of waveforms are plotted in one diagram. All figures are saved in the given environment using the names of the libraries.
+"""
+function plot_waveforms(env::DLEnv, data::DLData; count=4, bin_width_ns=10, cut=nothing)
+  for lib in data
+    plot_waveforms(env, lib; count=count, bin_width_ns=bin_width_ns, cut=cut)
+  end
+  return data
+end
+
+export plot_waveform_thumbnail
+function plot_waveform_thumbnail(env::DLEnv, waveform::Vector{Float32}; bin_width_ns=10, tcut=50:200, titlestring=nothing, diagram_size=(140, 100), diagram_font=font(12), filename="waveform-thumbnail.png")
+  waveform = waveform[tcut]
+  tlength = tcut[end] - tcut[1]
+  time = linspace(0, (tlength-1)*0.01, length(waveform))
+
+  fig = plot(time, waveform, size=diagram_size, line=(:blue), legend=:none, xformatter = x -> "$(Int(x)) us", grid=false)
+  yticks!(Float64[])
+  xticks!([0,1])
+  xaxis!(diagram_font)
+  yaxis!((minimum(waveform), maximum(waveform)*1.1))
+  if titlestring != nothing
+    title!(titlestring, titlefont=diagram_font)
+  end
+  savefig(joinpath(env.dir, "plots", filename))
+  fig
+end
+
+
+
+# NETWORK LEARNING
 
 function plot_learning_curves(n::NetworkInfo, filename; from_zero::Bool=false)
   train = n.training_curve
@@ -26,6 +90,9 @@ function plot_dnn(env::DLEnv, n::NetworkInfo)
   info(env, 2, "Generating plots in $dir...")
   plot_learning_curves(n, joinpath(dir, "learning_curves"))
 end
+
+
+# AUTOENCODER
 
 export plot_autoencoder
 function plot_autoencoder(env::DLEnv, n::NetworkInfo)
@@ -124,66 +191,6 @@ function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, 
 end
 
 
-export plot_waveforms
-"""
-Plots a number of waveforms from the given EventLibrary in a single diagram. The figure is saved in the given environment using the name of the library.
-"""
-function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16), evt_indices=nothing)
-  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
-  info(env, 2, "Plotting waveforms to $filepath")
-
-  if evt_indices == nothing
-    count = min(count, eventcount(events))
-    data = events.waveforms[:,1:count]
-  else
-    data = events.waveforms[:, evt_indices]
-  end
-
-  if cut != nothing
-    data = data[cut,:]
-  end
-
-  x_axis = linspace(0, (size(data,1)-1)*bin_width_ns, size(data,1))
-  plot(size=(600, 400), legend=:none)
-  for i in 1:size(data, 2)
-    plot!(x_axis, data[:,i], linewidth=3)
-  end
-  xaxis!("Time (ns)", diagram_font)
-  yaxis!("Current pulse", diagram_font)
-  savefig(filepath)
-
-  return events
-end
-
-"""
-For each EventLibrary, a number of waveforms are plotted in one diagram. All figures are saved in the given environment using the names of the libraries.
-"""
-function plot_waveforms(env::DLEnv, data::DLData; count=4, bin_width_ns=10, cut=nothing)
-  for lib in data
-    plot_waveforms(env, lib; count=count, bin_width_ns=bin_width_ns, cut=cut)
-  end
-  return data
-end
-
-export plot_waveform_thumbnail
-function plot_waveform_thumbnail(env::DLEnv, waveform::Vector{Float32}; bin_width_ns=10, tcut=50:200, titlestring=nothing, diagram_size=(140, 100), diagram_font=font(12), filename="waveform-thumbnail.png")
-  waveform = waveform[tcut]
-  tlength = tcut[end] - tcut[1]
-  time = linspace(0, (tlength-1)*0.01, length(waveform))
-
-  fig = plot(time, waveform, size=diagram_size, line=(:blue), legend=:none, xformatter = x -> "$(Int(x)) us", grid=false)
-  yticks!(Float64[])
-  xticks!([0,1])
-  xaxis!(diagram_font)
-  yaxis!((minimum(waveform), maximum(waveform)*1.1))
-  if titlestring != nothing
-    title!(titlestring, titlefont=diagram_font)
-  end
-  savefig(joinpath(env.dir, "plots", filename))
-  fig
-end
-
-
 function visualize_1D_convolution(model, name, filename)
   for param in model.arg_params
     if(param[1] == name)
@@ -213,6 +220,94 @@ function visualize_2D_convolution(model, name, filename_base)
   end
 end
 
+
+
+export plot_reconstruction_accuracy
+function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollection, noise::EventCollection; waveform_scale::Real=1.0)
+    info(env, 3, "Computing pulse reconstructions...")
+    reconst = scale_waveforms(encode_decode(scale_waveforms(pulses, waveform_scale), net), 1.0/waveform_scale)
+
+    info(env, 3, "Calculating standard deviations...")
+    std_reconst = zeros(Float32, eventcount(noise))
+    std_noise = zeros(Float32, eventcount(noise))
+
+    wf_pulses = waveforms(pulses)
+    wf_reconst = waveforms(reconst)
+    wf_noise = waveforms(noise)
+
+    for i in 1:eventcount(pulses)
+        std_reconst[i] = std(wf_reconst[:,i]-wf_pulses[:,i])
+        std_noise[i] = std(wf_noise[:,i])
+    end
+
+    avg_std = std(std_reconst-std_noise)
+    info(env, 3, "Std of additional reconstruction deviation: $avg_std")
+
+    # Plot added reconstruction error
+    E_axis = linspace(500, 2700, 250)
+    err_axis = linspace(-0.0005-2avg_std, 0.0015+2avg_std, 200)
+    info(env, 3, "Fitting 2D histogram with $(length(std_reconst)) entries...")
+    mse_hist_2d = fit(Histogram{Float64}, (pulses[:E], std_reconst-std_noise), (E_axis, err_axis), closed=:left)
+    broadcast!(x -> x <= 0 ? NaN : log10(x), mse_hist_2d.weights, mse_hist_2d.weights)
+    info(env, 3, "Plotting 2D histogram...")
+    fig_err = plot(mse_hist_2d, colorbar=:none)
+    xaxis!("Energy")
+    yaxis!(L"$\sigma_{reconst} - \sigma_{noise}$")
+
+    info(env, 2, "Average added error in terms of charge: $(median(std_reconst-std_noise))")
+    #println("Average added error in terms of A/E: ", median((std_reconst-std_noise) ./ AoE))
+    #fig_err_hist = stephist((std_reconst-std_noise), bins=y_axis)
+    mse_hist_1d = fit(Histogram{Float64}, std_reconst-std_noise, err_axis, closed=:left)
+    he_indices = find(E->E>1000, pulses[:E])
+    info(env, 3, "Fitting 1D histograms...")
+    mse_hist_1d_he = fit(Histogram{Float64}, std_reconst[he_indices]-std_noise[he_indices], err_axis, closed=:left)
+    fig_err_hist = plot(mse_hist_1d.weights, err_axis, line=(:black, :steppre), label="All events")
+    plot!(mse_hist_1d_he.weights, err_axis, line=("#ff7f0e", :steppre), label="> 1 MeV")
+    xaxis!("Events")
+    yaxis!(yticks=nothing)
+
+    info(env, 2, "Plotting results to $(joinpath(env, "plots", net.name, "Added noise.pdf"))")
+    plot(fig_err, fig_err_hist, size=(800, 400), layout=@layout([a{0.75w} b]))
+    savefig(joinpath(env, "plots", net.name, "Added noise.pdf"))
+    savefig(joinpath(env, "plots", net.name, "Added noise.png"))
+
+    # Plot examples of SSE and MSE
+    SSE = SSE_at(pulses, 2038) # 1592.5
+    MSE = MSE_at(pulses, 2038) # 1620.7
+    info(env, 3, "Drawing SSE at $(pulses[:E][SSE]) and MSE at $(pulses[:E][MSE])")
+
+    fig_SSE = reconstruction_plot(pulses, reconst, SSE, "Single-site event", true)
+    fig_MSE = reconstruction_plot(pulses, reconst, MSE, "Multi-site event", false)
+
+    all_layout = @layout [grid(1,2,widths=[0.50, 0.5]){0.45h}
+                        a{0.7w} b]
+    plot(fig_SSE, fig_MSE, fig_err, fig_err_hist, size=(800, 700), size=(15 * 39.37, 13.1 * 39.37), layout=all_layout)
+    savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).pdf"))
+    savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).png"))
+
+    return pulses, noise, reconst
+end
+
+export reconstruction_plot
+function reconstruction_plot(pulses::EventCollection, reconst::EventCollection, index::Integer, title::AbstractString, plot_y_axis; zoom=:)
+    t_axis = collect(sample_times(pulses) * 1e6)[zoom]
+    t_axis -= t_axis[1]
+    fig = plot(t_axis, waveforms(pulses)[zoom,index], line=(1,:black), label="Data")
+    plot!(t_axis, waveforms(reconst)[zoom,index], line=(2,:blue), label="Reconstruction")
+    xaxis!(L"Time ($\mu$s)")
+    if plot_y_axis
+        yaxis!("Current pulse")
+    end
+    yaxis!((min(minimum(waveforms(pulses)[zoom,index]), minimum(waveforms(reconst)[zoom,index])), 1.25 * max(maximum(waveforms(pulses)[zoom,index]), maximum(waveforms(reconst)[zoom,index]))))
+    if length(title) > 0
+      title!("$title ($(Int(round(pulses[:E][index]))) keV)")
+    end
+    return fig
+end
+
+
+
+# CLASSIFIER
 
 export plot_classifier_histogram
 function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key;
