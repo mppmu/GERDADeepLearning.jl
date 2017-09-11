@@ -56,9 +56,9 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
   branch_energies = tier4_bindings[:energy] = zeros(Float64, 0)
   branch_event_ch = tier4_bindings[:eventChannelNumber] = Ref(zero(Int32))
   # branch_timestamp = tier4_bindings[:timestamp] = Ref(zero(UInt64))
-  branch_aoeVeto = tier4_bindings[:psdFlag_AoverE_eNorm] = zeros(Int32, 0)
-  branch_aoeEval = tier4_bindings[:psdIsEval_AoverE_eNorm] = Bool[]
-  branch_aoeVal = tier4_bindings[:psdClassifier_AoE] = zeros(Float64, 0)
+  branch_aoeVeto = tier4_bindings[:isAoEvetoed] = zeros(Int32, 0)
+  branch_aoeEval = tier4_bindings[:isAoEevaluated] = Bool[]
+  branch_aoeVal = tier4_bindings[:AoEclassifier] = zeros(Float64, 0)
   branch_isTP = tier4_bindings[:isTP] = Ref(zero(Int32))
   branch_isBL = tier4_bindings[:isBL] = Ref(zero(Int32))
   branch_multiplicity = tier4_bindings[:multiplicity] = Ref(zero(Int32))
