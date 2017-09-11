@@ -164,7 +164,8 @@ end
 
 export preprocess
 function preprocess(env::DLEnv, data::DLData, config_name)
-  config = get_properties(env, config_name)
+  config = env.config[config_name]
+  @assert isa(config, Dict)
 
   select_channels=parse_detectors(config["detectors"])
   info(env, 3, "Selected channels: $select_channels")

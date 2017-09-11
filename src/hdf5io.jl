@@ -160,8 +160,7 @@ function write_lib(lib::EventLibrary, filepath::AbstractString, uninitialize::Bo
   end
 
   if uninitialize
-    lib.waveforms = zeros(Float32, 0, 0)
-    empty!(lib.labels)
+    dispose(lib)
     lib.initialization_function = lib2 -> _initialize_from_file(lib2, filepath, name(lib))
   end
 end

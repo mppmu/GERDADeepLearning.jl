@@ -215,7 +215,7 @@ function train(n::NetworkInfo,
   end
 
   verbosity >= 2 && info("$(train_provider.sample_count) data points, $(get_total_parameter_count(n.model)) learnable parameters, dropout=$(n["dropout"]), batch size $(train_provider.batch_size), using $optimizer_name with learning rate $learning_rate")
-  verbosity >= 2 && info("Starting training on $(n.context) (from $(n.epoch+1) to $epochs)... ")
+  verbosity >= 2 && info("Starting training on $(n.model.ctx) (from $(n.epoch+1) to $epochs)... ")
   verbosity >= 3 && info("Untrained MSE: $(eval(n.model, eval_provider, mx.MSE())[1][2])")
 
   # for arg_param in n.model.arg_params

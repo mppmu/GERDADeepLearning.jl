@@ -281,7 +281,7 @@ function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollec
 
     all_layout = @layout [grid(1,2,widths=[0.50, 0.5]){0.45h}
                         a{0.7w} b]
-    plot(fig_SSE, fig_MSE, fig_err, fig_err_hist, size=(800, 700), size=(15 * 39.37, 13.1 * 39.37), layout=all_layout)
+    plot(fig_SSE, fig_MSE, fig_err, fig_err_hist, size=(15 * 39.37, 13.1 * 39.37), layout=all_layout)
     savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).pdf"))
     savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).png"))
 

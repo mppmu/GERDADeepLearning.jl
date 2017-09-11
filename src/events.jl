@@ -73,6 +73,7 @@ function initialize(lib::EventLibrary)
   return lib
 end
 
+export dispose
 function dispose(lib::EventLibrary)
   lib.waveforms = zeros(Float32, 0, 0)
   empty!(lib.labels)
@@ -90,6 +91,12 @@ Base.start(data::DLData) = 1
 Base.done(data::DLData, state) = length(data.entries) == state-1
 Base.next(data::DLData, state) = data.entries[state], state+1
 Base.length(data::DLData) = length(data.entries)
+
+Base.start(lib::EventLibrary) = false
+Base.done(lib::EventLibrary, state) = state
+Base.next(lib::EventLibrary, state) = lib, true
+Base.length(lib::EventLibrary) = 1
+
 
 export flatten
 function flatten(data::DLData)
@@ -547,7 +554,7 @@ function SSE_at(lib::EventLibrary, energy::Real)
     else
         SSE_indices = find(c->c==0, lib[:ANN_mse_class])
     end
-    sorted_indices = sortperm(abs.(lib[:E].-2038))
+    sorted_indices = sortperm(abs.(lib[:E].-energy))
     for idx in sorted_indices
         if idx in SSE_indices
             return idx
@@ -564,7 +571,7 @@ function MSE_at(lib::EventLibrary, energy::Real)
     else
         MSE_indices = find(c->c==1, lib[:ANN_mse_class])
     end
-    sorted_indices = sortperm(abs.(lib[:E].-2038))
+    sorted_indices = sortperm(abs.(lib[:E].-energy))
     for idx in sorted_indices
         if idx in MSE_indices
             return idx
@@ -573,3 +580,19 @@ function MSE_at(lib::EventLibrary, energy::Real)
     throw(NoSuchEventException())
 end
 MSE_at(data::DLData, energy::Real) = MSE_at(flatten(data), energy)
+
+
+
+export equal_event_count_edges
+function equal_event_count_edges(events::EventCollection, label::Symbol; events_per_bin::Real=2000)
+    labels = sort(events[label])
+    total_event_count = eventcount(events)
+    equal_count_edges = []
+    i = 0
+    while (i*events_per_bin) < total_event_count
+        push!(equal_count_edges, labels[i*events_per_bin+1])
+        i += 1
+    end
+    return equal_count_edges
+end
+
