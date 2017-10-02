@@ -1,0 +1,85 @@
+{
+"path": "/remote/ceph/group/gerda/data/phase2/blind/v03.00/gen",
+"keylists": ["run0053-run0064-phy-analysis.txt"],
+
+"verbosity": 2,
+"cache": true,
+
+    
+"pulses": {
+    "detectors": [],
+    "test-pulses": "exclude",
+    "baseline-events": "exclude",
+    "unphysical-events": "exclude",
+    "low-energy-events": "include",
+    "preprocessing": ["baseline", "normalize_energy", "align_midpoints", "differentiate"],
+    "failed-preprocessing": "include",
+    "sets":{
+        "phy": [1]
+    }
+},
+    
+"noise": {
+    "detectors": [],
+    "test-pulses": "exclude",
+    "baseline-events": "exclude",
+    "unphysical-events": "exclude",
+    "low-energy-events": "include",
+    "preprocessing": ["baseline", "normalize_energy", "extract_noise", "differentiate"],
+    "failed-preprocessing": "include",
+    "sets":{
+        "phy": [1]
+    }
+},
+
+
+"autoencoder":
+{
+	"slim": 0,
+
+	"conv_filters": [2],
+	"conv_lengths": [9],
+	"pool_size": [4],
+	"pool_type": "max",
+	"conv_dropout": 0.0,
+
+	"fc": [7],
+	"dropout": 0.0,
+	"activation": "relu",
+
+	"optimizer" : "ADAM",
+	"momentum" : 0.95,
+	"learning_rate": 0.005,
+	"batch_size": 3000,
+	"epochs": 50
+},
+
+"latent-dnn-classifier":
+{
+	"slim": 0,
+
+	"fc": [10, 5],
+	"dropout": 0,
+	"activation": "relu",
+
+	"optimizer" : "ADAM",
+	"learning_rate": 0.0002,
+	"batch_size": 100,
+	"epochs": 1000
+},
+
+"alpha-classifier":
+{
+	"slim": 0,
+
+	"fc": [],
+	"dropout": 0,
+	"activation": "sigmoid",
+
+	"optimizer" : "ADAM",
+	"learning_rate": 0.0002,
+	"batch_size": 100,
+	"epochs": 1000
+}
+
+}
