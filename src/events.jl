@@ -78,7 +78,7 @@ function dispose(lib::EventLibrary)
   lib.waveforms = zeros(Float32, 0, 0)
   empty!(lib.labels)
 end
-dispose(data::DLData) = for lib in data didpose(lib) end
+dispose(data::DLData) = for lib in data dispose(lib) end
 
 function initialize(data::DLData)
   for lib in data
@@ -135,6 +135,15 @@ filter(lib::EventCollection, key::Symbol, value::Union{AbstractString,Number}) =
 filter{T<:Union{AbstractString,Number}}(lib::EventCollection, key::Symbol, values::Vector{T}) = filter(lib, key, x -> x in values)
 
 function filter(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
+    if haskey(lib.prop, predicate_key)
+        propval = lib.prop[predicate_key]
+        if !predicate(propval)
+            return nothing
+        else
+            return lib
+        end
+    end
+    
   if is_initialized(lib)
     indices = find(predicate, lib.labels[predicate_key])
     return lib[indices]
@@ -212,6 +221,31 @@ function Base.filter!(data::DLData, predicate_key::Symbol, predicate::Function)
 end
 
 
+function filter(lib::EventLibrary, predicate_keys::Vector{Symbol}, predicate::Function)
+    if is_initialized(lib)
+        indices = Int64[]
+        arg_arrays = [lib.labels[predicate_key] for predicate_key in predicate_keys]
+        for i in 1:eventcount(lib)
+            args = [arg_array[i] for arg_array in arg_arrays]
+            if predicate(args...)
+                push!(indices, i)
+            end
+        end
+        return lib[indices]
+    else
+        result = copy(lib) # shallow copy
+        result.initialization_function = lib2 -> _set_shallow(lib2, filter(initialize(lib), predicate_keys, predicate))
+        delete!(result.prop, :eventcount)
+        return result
+    end
+end
+
+function filter(data::DLData, predicate_keys::Vector{Symbol}, predicate::Function)
+    return cat([filter(lib, predicate_keys, predicate) for lib in data])
+end
+
+
+
 export filter_by_proxy
 function filter_by_proxy(lib::EventLibrary, predicate_lib::EventLibrary, predicate_key, predicate)
   @assert eventcount(lib) == eventcount(predicate_lib)
@@ -236,7 +270,7 @@ function getindex(events::EventLibrary, key::AbstractString)
   return getindex(events, Symbol(key))
 end
 
-function getindex(events::EventLibrary, selection)
+function getindex(events::EventLibrary, selection::Union{Range, Integer, Array{Int64}, Array{Int32}})
   initialize(events)
   result = EventLibrary(events.waveforms[:,selection])
   for (key, value) in events.labels
@@ -413,6 +447,7 @@ function Base.sort(lib::EventLibrary, labelkey::Symbol)
     p = sortperm(lib[labelkey])
     return lib[p]
 end
+Base.sort(data::DLData, labelkey::Symbol) = sort(flatten(data), labelkey)
 
 
 
@@ -565,9 +600,9 @@ end
 SSE_at(data::DLData, energy::Real) = SSE_at(flatten(data), energy)
 
 export MSE_at
-function MSE_at(lib::EventLibrary, energy::Real)
+function MSE_at(lib::EventLibrary, energy::Real; AoE_cut=0.7)
     if startswith(lib[:detector_name], "GD")
-        MSE_indices = find(AoE->AoE<0.7, lib[:AoE])
+        MSE_indices = find(AoE->(AoE<AoE_cut)&&(AoE!=0), lib[:AoE])
     else
         MSE_indices = find(c->c==1, lib[:ANN_mse_class])
     end
@@ -582,6 +617,11 @@ end
 MSE_at(data::DLData, energy::Real) = MSE_at(flatten(data), energy)
 
 
+export any_at
+function any_at(lib::EventCollection, energy::Real)
+    return findmin(abs.(lib[:E].-energy))[2]
+end
+
 
 export equal_event_count_edges
 function equal_event_count_edges(events::EventCollection, label::Symbol; events_per_bin::Real=2000)
@@ -594,5 +634,21 @@ function equal_event_count_edges(events::EventCollection, label::Symbol; events_
         i += 1
     end
     return equal_count_edges
+end
+
+export lookup_property
+function lookup_property(source::EventLibrary, sourceindex::Integer, target::DLData, propkey::Symbol)
+    time = source[:timestamp][sourceindex]
+    energy = source[:E][sourceindex]
+    for lib in target
+        t_times = lib[:timestamp]
+        t_energies = lib[:E]
+        for i in 1:eventcount(lib)
+            if (t_times[i] == time) && (t_energies[i] == energy)
+                return lib[propkey]
+            end
+        end
+    end
+    return nothing
 end
 

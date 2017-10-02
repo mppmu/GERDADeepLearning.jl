@@ -57,7 +57,9 @@ function lazy_read_all(dir::AbstractString)
   files = readdir(dir)
   names = [file[1:end-3] for file in files]
   libs = [lazy_read_library(joinpath(dir, files[i]), names[i]) for i in 1:length(files)]
-  return DLData(libs)
+  result = DLData(libs)
+  result.dir = dir
+  return result
 end
 
 function lazy_read_library(h5_filepath, libname)

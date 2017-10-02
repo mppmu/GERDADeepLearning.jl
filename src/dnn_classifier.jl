@@ -27,7 +27,7 @@ end
 
 
 export dnn_classifier
-function dnn_classifier(env::DLEnv, data::DLData;
+function dnn_classifier(env::DLEnv, data;
   id="dnn-classifier", action::Symbol=:auto, label_key=:SSE,
   train_key="train", xval_key="xval", evaluate=["test"])
 
@@ -61,19 +61,21 @@ function dnn_classifier(env::DLEnv, data::DLData;
     end
 
     train_provider = mx.ArrayDataProvider(:data => waveforms(training_data),
-        :label => transpose(training_data[label_key]), batch_size=n["batch_size"])
+        :label => collect(transpose(training_data[label_key])), batch_size=n["batch_size"])
     xval_provider = mx.ArrayDataProvider(:data => waveforms(xval_data),
-        :label => transpose(xval_data[label_key]), batch_size=n["batch_size"])
+        :label => collect(transpose(xval_data[label_key])), batch_size=n["batch_size"])
   else
     train_provider = nothing
     xval_provider = nothing
   end
 
-  min_eval_count = minimum([eventcount(data[:set=>e]) for e in evaluate])
-  if min_eval_count < n["batch_size"]
-    n["batch_size"] = min_eval_count
-    info("A test set only has $min_eval_count data points. Adjusting bach size accordingly.")
-  end
+    if length(evaluate) > 0
+      min_eval_count = minimum([eventcount(data[:set=>e]) for e in evaluate])
+      if min_eval_count < n["batch_size"]
+        n["batch_size"] = min_eval_count
+        info("A test set only has $min_eval_count data points. Adjusting bach size accordingly.")
+      end
+    end
 
   build(n, action, train_provider, xval_provider, _build_dnn_classifier)
 

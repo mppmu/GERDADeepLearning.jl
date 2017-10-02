@@ -95,10 +95,15 @@ function detectors(env::DLEnv, dettype::AbstractString)
   elseif dettype == "natural"
     return Natural_GERDA_II()
   elseif dettype == "used"
-    return vcat(BEGes_GERDA_II(), Coax_GERDA_II())
+    return Used_GERDA_II()
   else
     throw(ArgumentError("Unknown detector type: $dettype"))
   end
+end
+
+function detectors(env::DLEnv, keywords::AbstractString...)
+    sets = [detectors(env, keyword) for keyword in keywords]
+    return intersect(sets...)
 end
 
 function detectors(env::DLEnv)
@@ -118,6 +123,7 @@ function _create_h5data(env::DLEnv, raw_dir)
   end
   isdir(raw_dir) || mkdir(raw_dir)
   mgdo_to_hdf5(env.config["path"], raw_dir, keylists; verbosity=get_verbosity(env))
+  info(env, 3, "Converted raw data from $(env.config["path"]) to $raw_dir.")
 end
 
 export getdata
@@ -260,6 +266,7 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
   else
     info(env, 2, "Computing '$lib_name'...")
     data = compute()
+    info(env, 3, "Computation of '$lib_name' finished.")
 
     # check type
     if !isa(data, DLData)
@@ -267,12 +274,20 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
     end
 
     if data.dir == nothing
+      info(env, 3, "Writing computed data to env as '$lib_name' (uninitialize=$uninitialize).")
       push!(env, lib_name, data; uninitialize=uninitialize)
       return data
     else
       # Rename directory
-      mv(data.dir, _cachedir(env, lib_name))
-      return get(env, lib_name)
+      targetdir = _cachedir(env, lib_name)
+          if targetdir != data.dir
+              info(env, 3, "Moving data from $(data.dir) to $targetdir and reloading.")
+              mv(data.dir, targetdir)
+              return get(env, lib_name)
+            else
+                info(env, 3, "Data is already in the right location ($(data.dir)).")
+                return data
+            end
     end
   end
 end
@@ -332,7 +347,6 @@ end
 function _cachedir(env::DLEnv, lib_name::String)
   return joinpath(env.dir, "data", lib_name)
 end
-
 
 function network(env::DLEnv, name::String)
     dir = joinpath(env.dir, "models", name)

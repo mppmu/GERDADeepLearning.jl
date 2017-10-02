@@ -82,7 +82,7 @@ end
 
 
 export autoencoder
-function autoencoder(env::DLEnv, data::EventCollection; id="autoencoder", action::Symbol=:auto, train_key="train", xval_key="xval")
+function autoencoder(env::DLEnv, data; id="autoencoder", action::Symbol=:auto, train_key="train", xval_key="xval")
 
   if action == :auto
     action = decide_best_action(network(env,id))
@@ -209,6 +209,9 @@ function encode_decode(events::EventLibrary, n::NetworkInfo)
   batch_size=n["batch_size"]
   provider = padded_array_provider(:data, waveforms(events), batch_size)
   reconst = mx.predict(n.model, provider)
+    if eventcount(events) < batch_size
+        reconst = reconst[:,1:eventcount(events)]
+    end
 
   result = copy(events)
   result.waveforms = reconst

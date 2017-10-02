@@ -41,11 +41,16 @@ function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, key
       end
     end
   catch exc
+    verbosity >= 1 && info("Fatal error during conversion to HDF5. Closing HDF5 files and rethrowing error.")
     for h5file in h5files close(h5file) end
     rethrow(exc)
   end
+    
+  verbosity >= 3 && info("Finished conversion without fatal errors. Closing HDF5 files...")
 
   for h5file in h5files close(h5file) end
+    
+  verbosity >= 3 && info("All HDF5 files closed.")
 end
 
 
@@ -86,47 +91,47 @@ function read_single_thread_single_file(detector_names, file1, file4, label_keys
       for i in threadpartition(eachindex(tier1_tree))
         t1_evt = tier1_tree[i]
         tier4_input[i]
-        # up to here it works!
-
 
         for (no_in_event, detector_i) in enumerate(t1_evt.waveforms.ch) # 0:39
           detector = detector_i + 1
-          push!(waveforms[detector], convert(Array{Float32}, t1_evt.aux_waveforms.samples[no_in_event]))
+                    
+          if branch_energies[detector] > 0
+              push!(waveforms[detector], convert(Array{Float32}, t1_evt.aux_waveforms.samples[no_in_event]))
 
-          push!(keylist[detector], keylist_id)
-          push!(timestamp[detector], branch_timestamp.x)
-          push!(E[detector], branch_energies[detector])
+              push!(keylist[detector], keylist_id)
+              push!(timestamp[detector], branch_timestamp.x)
+              push!(E[detector], branch_energies[detector])
 
-          push!(isTP[detector], branch_isTP.x)
-          push!(isBL[detector], branch_isBL.x)
-          push!(multiplicity[detector], branch_multiplicity.x)
-          push!(isMuVetoed[detector], branch_isMuVetoed.x)
-          if is_physics_data
-            push!(isLArVetoed[detector], branch_isLArVetoed.x)
-          else
-            push!(isLArVetoed[detector], 0)
-          end
+              push!(isTP[detector], branch_isTP.x)
+              push!(isBL[detector], branch_isBL.x)
+              push!(multiplicity[detector], branch_multiplicity.x)
+              push!(isMuVetoed[detector], branch_isMuVetoed.x)
+              if is_physics_data
+                push!(isLArVetoed[detector], branch_isLArVetoed.x)
+              else
+                push!(isLArVetoed[detector], 0)
+              end
 
-          # A/E
-          push!(AoE[detector], branch_aoeVal[detector])
-          if branch_aoeEval[detector]
-              push!(AoE_class[detector], branch_aoeVeto[detector])
-          else
-              push!(AoE_class[detector], -1)
-          end
-          # ANN - MSE
-          if branch_ANN_mse_eval[detector]
-            push!(ANN_mse_class[detector], branch_ANN_mse_flag[detector])
-          else
-            push!(ANN_mse_class[detector], -1)
-          end
-          # ANN - Alpha
-          if branch_ANN_alpha_eval[detector]
-            push!(ANN_alpha_class[detector], branch_ANN_alpha_flag[detector])
-          else
-            push!(ANN_alpha_class[detector], -1)
-          end
-
+              # A/E
+              push!(AoE[detector], branch_aoeVal[detector])
+              if branch_aoeEval[detector]
+                  push!(AoE_class[detector], branch_aoeVeto[detector])
+              else
+                  push!(AoE_class[detector], -1)
+              end
+              # ANN - MSE
+              if branch_ANN_mse_eval[detector]
+                push!(ANN_mse_class[detector], branch_ANN_mse_flag[detector])
+              else
+                push!(ANN_mse_class[detector], -1)
+              end
+              # ANN - Alpha
+              if branch_ANN_alpha_eval[detector]
+                push!(ANN_alpha_class[detector], branch_ANN_alpha_flag[detector])
+              else
+                push!(ANN_alpha_class[detector], -1)
+              end
+           end # if E
         end # for
       end # for
     end # open
@@ -174,7 +179,8 @@ h5_arrays :: Detector -> Type
 results :: Type -> Detector
 """
 function append_to_hdf5(results, h5_arrays, verbosity)
-  verbosity >= 3 && info("Appending results to HDF5 files: per detector $(length.(results[:E]))")
+  verbosity >= 3 && info("Appending results to HDF5 files: $(length(results)) categories with entries per detector: $(length.(results[:E]))")
+    verbosity >= 4 && info("Energy arrays of detectors 1 and 2 start with: $(results[:E][1][1:10]) (total length $(length(results[:E][1]))) and $(results[:E][2][1:10]) (total length $(length(results[:E][2])))")
   for detector in 1:length(h5_arrays)
     for key in keys(results)
       h5_array = h5_arrays[detector][key]

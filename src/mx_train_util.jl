@@ -323,7 +323,7 @@ function eval(model, provider::mx.ArrayDataProvider, metric::mx.AbstractEvalMetr
 end
 
 
-
+export load_network
  function load_network(n::NetworkInfo, max_epoch; output_name="softmax", delete_unneeded_arguments=true, pick_best=true)
    if max_epoch < 0
      max_epoch = last_epoch(n.dir, n.name)

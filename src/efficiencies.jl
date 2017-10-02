@@ -261,6 +261,21 @@ function background_rejection_at(signal_eff::AbstractFloat, effs::EfficiencyColl
   info("Signal efficiency $signal_eff is never reached!")
 end
 
+export background_rejection_std_at
+function background_rejection_std_at(signal_eff::AbstractFloat, effs::EfficiencyCollection; signal_peak=:Tl_DEP, bkg_peak=:Bi_FEP)
+    sig = effs[signal_peak]
+    bkg = effs[bkg_peak]
+    i, cut, eff, rej = background_rejection_at(signal_eff, effs; signal_peak=signal_peak, bkg_peak=bkg_peak)
+    if (sig.std[i] == 0) || (bkg.std[i] == 0)
+        return -1
+    else
+        return sqrt(sig.std[i]^2 + bkg.std[i]^2)
+    end
+end
+
+
+export curve
+curve(eff::EfficiencyCurve) = (eff.cut_values, eff.efficiencies)
 
 export roc_curve
 function roc_curve(effs::EfficiencyCollection; signal_effs=sqrt.(linspace(0.04, 0.99, 50)), signal_peak=:Tl_DEP, bkg_peak=:Bi_FEP)
