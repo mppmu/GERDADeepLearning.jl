@@ -1,11 +1,11 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
 using HDF5
-import Base: filter, length, getindex, haskey, copy, string, print, println, deepcopy
-import HDF5: name
+import Base: filter, length, getindex, haskey, copy, string, print, deepcopy
 using Compat
 
 
+export EventCollection
 @compat abstract type EventCollection
 end
 
@@ -258,13 +258,24 @@ end
 
 export getindex
 function getindex(lib::EventLibrary, key::Symbol)
+    if key == :wf || key == :waveforms || key == :waveform
+        return waveforms(lib)
+    end
   if haskey(lib.prop, key)
     return lib.prop[key]
   else
     return initialize(lib).labels[key]
   end
 end
-getindex(data::DLData, key::Symbol) = flatten(data)[key]
+function getindex(data::DLData, key::Symbol)
+    if length(data) == 0
+        return []
+    end
+    if haskey(data.entries[1].prop, key)
+        return [lib[key] for lib in data]
+    end
+    return flatten(data)[key]
+end
 
 function getindex(events::EventLibrary, key::AbstractString)
   return getindex(events, Symbol(key))
@@ -349,11 +360,12 @@ end
 
 function Base.string(events::EventLibrary)
   if is_initialized(events)
-    return "$(name(events)) ($(eventcount(events)) events)"
+    return "$(events[:name]) ($(eventcount(events)) events)"
   else
-    return "$(name(events)) (not yet initialized)"
+    return "$(events[:name]) (not yet initialized)"
   end
 end
+Base.println(lib::EventLibrary) = println(string(lib))
 Base.string(data::DLData) = "DLData ($(length(data.entries)) subsets)"
 Base.show(data::DLData) = println(data)
 Base.show(io::IO, data::DLData) = println(io, string(data))
@@ -368,9 +380,18 @@ end
 
 Base.summary(events::EventCollection) = string(events)
 
-export name
-name(events::EventLibrary) = haskey(events, :name) ? events[:name] : "<unnamed>"
-name(data::DLData) = [name(lib) for lib in data]
+export eventinfo
+function eventinfo(events::EventCollection, index::Integer)
+    lib, i = unravel_index(events, index)
+    println("Event properties:")
+    for (key, arr) in lib.labels
+        println("  $key: $(arr[i])")
+    end
+    println("General properties:")
+    for (key, val) in lib.prop
+        println("  $key: $val")
+    end
+end
 
 export setname!
 function setname!(events::EventLibrary, name::String)
@@ -381,6 +402,18 @@ function setname!(data::DLData, names::Vector{String})
   for i in 1:length(data.entries)
     setname!(data.entries[i], names[i])
   end
+end
+
+function unravel_index(events::EventCollection, index::Integer)
+    total = 0
+    for lib in events
+        if index > total+eventcount(lib)
+            total += eventcount(lib)
+        else
+            return lib, index-total
+        end
+    end
+    return throw(NoSuchEventException())
 end
 
 # export convert
@@ -544,7 +577,7 @@ function equalize_counts_by_label(events::EventLibrary, label_key=:SSE)
   i_SSE = find(x -> x==1, labels)
   i_MSE = find(x -> x==0, labels)
   count = min(length(i_SSE), length(i_MSE))
-  info("Equalizing $(name(events)) to $count counts. SSE: $(length(i_SSE)), MSE: $(length(i_MSE))")
+  info("Equalizing $(events[:name]) to $count counts. SSE: $(length(i_SSE)), MSE: $(length(i_MSE))")
 
   # trim and shuffle
   used_indices = [i_SSE[1:count];i_MSE[1:count]]
@@ -637,7 +670,7 @@ function equal_event_count_edges(events::EventCollection, label::Symbol; events_
 end
 
 export lookup_property
-function lookup_property(source::EventLibrary, sourceindex::Integer, target::DLData, propkey::Symbol)
+function lookup_property(source::EventLibrary, sourceindex::Integer, target::EventCollection, propkey::Symbol)
     time = source[:timestamp][sourceindex]
     energy = source[:E][sourceindex]
     for lib in target
@@ -645,7 +678,7 @@ function lookup_property(source::EventLibrary, sourceindex::Integer, target::DLD
         t_energies = lib[:E]
         for i in 1:eventcount(lib)
             if (t_times[i] == time) && (t_energies[i] == energy)
-                return lib[propkey]
+                return lib[i:i][propkey]
             end
         end
     end

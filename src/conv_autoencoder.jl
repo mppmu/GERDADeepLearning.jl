@@ -139,23 +139,28 @@ end
 
 export encode
 function encode(events::EventLibrary, n::NetworkInfo; log=false)
-  log && info("$(n.name): encoding '$(name(events))'...")
+  log && info("$(n.name): encoding '$(events[:name])'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true, n.context)
 
   result = copy(events)
 
   if eventcount(events) > 0
-        println(eventcount(events))
-        println(size(waveforms(events),2))
-    provider = mx.ArrayDataProvider(:data => waveforms(events), batch_size=min(n["batch_size"], eventcount(events)))
-    transformed = mx.predict(model, provider)
-    result.waveforms = transformed
+        all_waveforms = waveforms(events)
+        all_encoded = []
+        pred_batch_size = 400000
+        # process in batches, else kernel crashes
+        for i in 1:pred_batch_size:size(all_waveforms,2)
+            batch_range = i:min(size(all_waveforms,2),(i+pred_batch_size-1))
+            provider = mx.ArrayDataProvider(:data => all_waveforms[:,batch_range], batch_size=min(n["batch_size"], length(batch_range)))
+            push!(all_encoded, mx.predict(model, provider))
+        end
+        result.waveforms = hcat(all_encoded...)
   else
     result.waveforms = zeros(Float32, 0, 0)
   end
 
-  setname!(result, name(result)*"_encoded")
+  setname!(result, result[:name]*"_encoded")
   push_classifier!(result, "Autoencoder")
   return result
 end
@@ -166,7 +171,7 @@ end
 
 export decode
 function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
-  log && info("$(n.name): decoding '$(name(compact))'...")
+  log && info("$(n.name): decoding '$(compact[:name])'...")
 
   X = mx.Variable(:data)
   Y = mx.Variable(:label) # not needed because no training
@@ -183,7 +188,7 @@ function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
 
   result = copy(compact)
   result.waveforms = transformed
-  setname!(result, name(result)*"_decoded")
+  setname!(result, result[:name]*"_decoded")
   push_classifier!(result, "Autoencoder")
   return result
 end
@@ -215,7 +220,7 @@ function encode_decode(events::EventLibrary, n::NetworkInfo)
 
   result = copy(events)
   result.waveforms = reconst
-  setname!(result, "$(name(result))_reconst")
+  setname!(result, "$(result[:name])_reconst")
   push_classifier!(result, "Autoencoder")
   return result
 end
