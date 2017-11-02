@@ -14,7 +14,12 @@ function create_libroot(h5file, libname)
   return libroot
 end
 
+"""
+The keylist must be iterable and implement listname.
+The entries must support the string method.
+"""
 function create_extendible_hdf5_files(output_dir, keylists, detector_names, sample_size, chunk_size, label_keys)
+ 
   h5files = [h5open(joinpath(output_dir, "$dname.h5"), "w") for dname in detector_names]
 
   label_arrays = Dict[]
@@ -44,7 +49,7 @@ function create_extendible_hdf5_files(output_dir, keylists, detector_names, samp
     attrs(properties)["waveform_type"] = "raw"
     for (i,keylist) in enumerate(keylists)
       klg = g_create(properties, "Keylist$i")
-      attrs(klg)["name"] = name(keylist)
+      attrs(klg)["name"] = listname(keylist)
       attrs(klg)["entries"] = [string(key) for key in keylist.entries]
     end
   end
@@ -84,7 +89,7 @@ function lazy_read_library(h5_filepath, libname)
   end
   lib.prop[:eventcount] = size(libroot["waveforms"], 2)
   # TODO keylists
-                    
+
   # Initialize label names
   labels = libroot["labels"]
   for key in names(labels)
@@ -104,7 +109,7 @@ function _initialize_from_file(lib::EventLibrary, h5_filepath, libname)
     try
       lib.waveforms = read(libroot["waveforms"])
     catch err
-      info("Illegal waveform data for lib $(name(lib)).")
+      info("Illegal waveform data for lib $(lib[:name]).")
       lib.waveforms = zeros(Float32, 1, 0)
     end
 
@@ -122,7 +127,7 @@ export write_all
 function write_all_sequentially(data::DLData, dir::AbstractString, uninitialize::Bool)
   isdir(dir) || mkdir(dir)
   for lib in data
-    filepath = joinpath(dir, name(lib)*".h5")
+    filepath = joinpath(dir, lib[:name]*".h5")
     write_lib(lib, filepath, uninitialize)
   end
 end
@@ -133,7 +138,7 @@ function write_all_multithreaded(data::DLData, dir::AbstractString, uninitialize
   @everythread begin
     for i in threadpartition(1:length(data))
       lib = data.entries[i]
-        filepath = joinpath(dir, name(lib)*".h5")
+        filepath = joinpath(dir, lib[:name]*".h5")
         write_lib(lib, filepath, uninitialize)
     end
   end
@@ -142,7 +147,7 @@ end
 export write_lib
 function write_lib(lib::EventLibrary, filepath::AbstractString, uninitialize::Bool)
   h5open(filepath, "w") do h5file
-    libroot = create_libroot(h5file, name(lib))
+    libroot = create_libroot(h5file, lib[:name])
 
     write(libroot, "waveforms", waveforms(lib))
 
@@ -163,7 +168,7 @@ function write_lib(lib::EventLibrary, filepath::AbstractString, uninitialize::Bo
 
   if uninitialize
     dispose(lib)
-    lib.initialization_function = lib2 -> _initialize_from_file(lib2, filepath, name(lib))
+    lib.initialization_function = lib2 -> _initialize_from_file(lib2, filepath, lib[:name])
   end
 end
 

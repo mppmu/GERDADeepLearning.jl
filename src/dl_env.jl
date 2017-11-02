@@ -112,8 +112,18 @@ end
 
 
 export _create_h5data
-function _create_h5data(env::DLEnv, raw_dir)
-  info(env, 2, "Reading original data from $(env.config["path"])")
+function _create_h5data(env::DLEnv, output_dir)
+    info(env, 2, "Reading original data from $(env.config["path"])")
+    isdir(output_dir) || mkdir(output_dir)
+    if haskey(env.config, "rawformat")
+        _seg_to_hdf5(env, output_dir)
+    else
+        _mgdo_to_hdf5(env, output_dir)
+    end
+    info(env, 3, "Converted raw data, HDF5 stored in $output_dir.")
+end
+
+function _mgdo_to_hdf5(env::DLEnv, output_dir)
   keylists = KeyList[]
   for (i,keylist_path) in enumerate(env.config["keylists"])
     if !endswith(keylist_path, ".txt")
@@ -121,9 +131,18 @@ function _create_h5data(env::DLEnv, raw_dir)
     end
     push!(keylists, parse_keylist(resolvepath(env, keylist_path), keylist_path))
   end
-  isdir(raw_dir) || mkdir(raw_dir)
-  mgdo_to_hdf5(env.config["path"], raw_dir, keylists; verbosity=get_verbosity(env))
-  info(env, 3, "Converted raw data from $(env.config["path"]) to $raw_dir.")
+  mgdo_to_hdf5(env.config["path"], output_dir, keylists; verbosity=get_verbosity(env))
+end
+
+function _seg_to_hdf5(env::DLEnv, output_dir)
+    src_dirs = env.config["path"]
+    all_files = []
+    for src_dir in src_dirs
+        content = readdir(src_dir)
+        content = src_dir .* "/" .* content[find(f->endswith(f, ".root"), content)]
+        append!(all_files, content)
+    end
+    seg_to_hdf5(env.config["rawformat"], all_files, output_dir, get_verbosity(env))
 end
 
 export getdata
