@@ -47,7 +47,7 @@ function parse_keylist(keylist_file::AbstractString, name::String)
 end
 
 export name
-function name(keylist::KeyList)
+function listname(keylist::KeyList)
   return keylist.name
 end
 
