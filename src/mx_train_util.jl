@@ -214,9 +214,9 @@ function train(n::NetworkInfo,
     mx.init_model(n.model, mx.UniformInitializer(0.1); overwrite=false, [mx.provide_data(train_provider)..., mx.provide_label(train_provider)...]...)
   end
 
-  verbosity >= 2 && info("$(train_provider.sample_count) data points, $(get_total_parameter_count(n.model)) learnable parameters, dropout=$(n["dropout"]), batch size $(train_provider.batch_size), using $optimizer_name with learning rate $learning_rate")
-  verbosity >= 2 && info("Starting training on $(n.model.ctx) (from $(n.epoch+1) to $epochs)... ")
-  verbosity >= 3 && info("Untrained MSE: $(eval(n.model, eval_provider, mx.MSE())[1][2])")
+  verbosity >= 2 && info("$(train_provider.sample_count) data points, $(get_total_parameter_count(n.model)) learnable parameters, dropout=$(n["dropout"]), batch size $(train_provider.batch_size), using $optimizer_name with learning rate $learning_rate\u1b[K")
+  verbosity >= 2 && info("Starting training on $(n.model.ctx) (from $(n.epoch+1) to $epochs)... \u1b[K")
+  verbosity >= 3 && info("Untrained MSE: $(eval(n.model, eval_provider, mx.MSE())[1][2])\u1b[K")
 
   # for arg_param in n.model.arg_params
   #   print("$(arg_param[1]): ")

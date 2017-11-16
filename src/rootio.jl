@@ -145,41 +145,43 @@ function listname(filelist::Vector{AbstractString})
 end
 
 """ Segmented detectors """
-function seg_to_hdf5(formattype::AbstractString, filelist::Vector, output_dir::AbstractString, verbosity::Integer)
-
-  sample_size = _seg_get_waveform_length(formattype, filelist[1])
+function seg_to_hdf5(formattype::AbstractString, keylists::Vector{Vector{AbstractString}}, output_dir::AbstractString, verbosity::Integer)
+  all_files = vcat(keylists...)
+  sample_size = _seg_get_waveform_length(formattype, all_files[1])
   verbosity > 2 && info("Determined number of samples per waveform = $sample_size.")
 
-  label_keys = [:filenum=>Int32, :E=>Float32, :A=>Float32, :SSch=>Int8]
+  label_keys = [:keylist=>Int32, :filenum=>Int32, :E=>Float32, :A=>Float32, :SSch=>Int8]
 
   # Create HDF5 extendible storage
-  h5files, h5_arrays = create_extendible_hdf5_files(output_dir, filelist, [formattype], sample_size, 256, label_keys)
+  h5files, h5_arrays = create_extendible_hdf5_files(output_dir, [], [formattype], sample_size, 256, label_keys)
 
-  try
-    file_count = length(filelist)
-    for (file_i, file) in enumerate(filelist)
-      if !isfile(file)
-        verbosity >= 1 && info("Skipping entry because tier1 file does not exist: $file")
-      else
-        verbosity >= 2 && info("Reading file $file_i / $file_count...")
-        verbosity >= 3 && info("File: $file")
-        results = ThreadLocal{Any}()
-        # Run every thread over part of the data
-        @everythread begin
-          thread_result = seg_read_single_thread_single_file(file, label_keys, verbosity, sample_size, file_i)
-          results[] = thread_result
+    try
+        file_count = length(all_files)
+        for(kl_i, filelist) in enumerate(keylists)
+            for (file_i, file) in enumerate(filelist)
+              if !isfile(file)
+                verbosity >= 1 && info("Skipping entry because file does not exist: $file")
+              else
+                verbosity >= 2 && info("Reading file $file_i / $file_count...")
+                verbosity >= 3 && info("File: $file")
+                results = ThreadLocal{Any}()
+                # Run every thread over part of the data
+                @everythread begin
+                  thread_result = seg_read_single_thread_single_file(formattype, file, label_keys, verbosity, sample_size, kl_i, file_i)
+                  results[] = thread_result
+                end
+
+                # Write parts to HDF5 files
+                results = merge_labels_per_detector(all_thread_values(results), label_keys)
+                append_to_hdf5(results, h5_arrays, verbosity)
+              end
+            end
         end
-
-        # Write parts to HDF5 files
-        results = merge_labels_per_detector(all_thread_values(results), label_keys)
-        append_to_hdf5(results, h5_arrays, verbosity)
-      end
+    catch exc
+        verbosity >= 1 && info("Fatal error during conversion to HDF5. Closing HDF5 files and rethrowing error.")
+        for h5file in h5files close(h5file) end
+        rethrow(exc)
     end
-  catch exc
-    verbosity >= 1 && info("Fatal error during conversion to HDF5. Closing HDF5 files and rethrowing error.")
-    for h5file in h5files close(h5file) end
-    rethrow(exc)
-  end
 
   verbosity >= 3 && info("Finished conversion without fatal errors. Closing HDF5 files...")
 
@@ -188,21 +190,27 @@ function seg_to_hdf5(formattype::AbstractString, filelist::Vector, output_dir::A
   verbosity >= 3 && info("All HDF5 files closed.")
 end
 
-function seg_read_single_thread_single_file(file, label_keys, verbosity, sample_size, file_i)
+function seg_read_single_thread_single_file(formattype::AbstractString, file, label_keys, verbosity, sample_size, kl_i, file_i)
   bindings = TTreeBindings()
   r_Cha_TotalNum = bindings[:Cha_TotalNum] = Ref(zero(Int32)) # number of channels
   r_Cha_Energy = bindings[:Cha_Energy] = zeros(Float32, 0)
   r_Core_CurrentMaximum = bindings[:Core_CurrentMaximum] = Ref(zero(Float32))
   r_index_ssseg = bindings[:index_ssseg] = Ref(zero(Int32)) # channel of single-site events, 0 for multi-site
-  r_PS_Amp = bindings[:PS_Amp] = zeros(Float32, 0) # all waveforms in one array
+  if formattype == "SegCoax"
+    r_PS_Amp = bindings[:PS_Amp] = zeros(Float32, 0) # all waveforms in one array
+  elseif formattype == "SegBEGe"
+    r_PS_Amp = bindings[:PS_rAmp] = zeros(Float32, 0) # all waveforms in one array
+  else
+    throw(ArgumentError())
+  end
   r_PS_TotalNum = bindings[:PS_TotalNum] = Ref(zero(Int32)) # number of channels * pulse length per channel
 
 
   # Prepare tables
-  result, filenum, E, A, SSch = create_label_arrays(label_keys, 1)
+  result, keylist, filenum, E, A, SSch = create_label_arrays(label_keys, 1)
   waveforms = [Vector{Float32}[]]
   result[:waveforms] = waveforms
-    
+
     sel_channel = 1
 
   open(TChainInput, bindings, "PSTree", file) do pstree
@@ -210,6 +218,9 @@ function seg_read_single_thread_single_file(file, label_keys, verbosity, sample_
 
     for i in eachindex(pstree)
         getindex(pstree, i)
+
+        push!(keylist[1], Int32(kl_i))
+        push!(filenum[1], Int32(file_i))
 
         waveform_size = Int32(r_PS_TotalNum.x / r_Cha_TotalNum.x)
         pulsshape_range = ((sel_channel-1)*waveform_size+1) : sel_channel*waveform_size
@@ -220,7 +231,7 @@ function seg_read_single_thread_single_file(file, label_keys, verbosity, sample_
         push!(SSch[1], r_index_ssseg.x)
     end
   end
-    
+
     return result
 end
 
@@ -470,5 +481,3 @@ function lookup(result, waveform_lists, set_name)
   tab_testpulses = result[set_name].labels[:isTP]
   return tab_energies, tab_aoeValues, tab_aoeClasses, list_waveforms, tab_baselines, tab_testpulses
 end
-
-

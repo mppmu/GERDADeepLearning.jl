@@ -542,7 +542,7 @@ function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{Abs
       result[dset_name] = copy(lib)
     end
     result[dset_name].prop[:set] = dset_name
-    setname!(result[dset_name], name(result[dset_name])*"_"*dset_name)
+    setname!(result[dset_name], result[dset_name][:name]*"_"*dset_name)
   end
   return result
 end

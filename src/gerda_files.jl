@@ -59,6 +59,18 @@ function Base.length(keylist::KeyList)
   return length(keylist.entries)
 end
 
+function Base.start(keylist::KeyList)
+  return start(keylist.entries)
+end
+
+function Base.done(keylist::KeyList, state)
+  return done(keylist.entries, state)
+end
+
+function Base.next(keylist::KeyList, state)
+  return next(keylist.entries, state)
+end
+
 
 phase2_detectors = ["GD91A", "GD35B", "GD02B", "GD00B", "GD61A", "GD89B", "GD02D", "GD91C", # string1
 		"ANG5", "RG1", "ANG3", # string2

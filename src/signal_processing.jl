@@ -7,7 +7,7 @@ export preprocess_transform
 function preprocess_transform(env::DLEnv, lib::EventLibrary, steps::Vector{String}; copyf=deepcopy)
   initialize(lib)
   result = copyf(lib)
-  setname!(result, name(lib)*"_preprocessed")
+  setname!(result, lib[:name]*"_preprocessed")
   put_label!(result, :FailedPreprocessing, zeros(Float32, eventcount(lib)))
   result.prop[:preprocessing] = steps
 
@@ -20,7 +20,7 @@ function preprocess_transform(env::DLEnv, lib::EventLibrary, steps::Vector{Strin
 
   failed_count = length(find(f -> f != 0, result[:FailedPreprocessing]))
   if failed_count > 0
-    info(env, 1, "Preprocesing failed for $failed_count events in $(name(lib)). These have been tagged with the label :FailedPreprocessing = 1")
+    info(env, 1, "Preprocesing failed for $failed_count events in $(lib[:name]). These have been tagged with the label :FailedPreprocessing = 1")
   end
 
   return result

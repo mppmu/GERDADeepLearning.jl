@@ -10,7 +10,7 @@ export plot_waveforms
 Plots a number of waveforms from the given EventLibrary in a single diagram. The figure is saved in the given environment using the name of the library.
 """
 function plot_waveforms(env::DLEnv, events::EventLibrary; count=4, bin_width_ns=10, cut=nothing, diagram_font=font(16), evt_indices=nothing)
-  filepath = joinpath(env.dir, "plots", "waveforms-$(name(events)).png")
+  filepath = joinpath(env.dir, "plots", "waveforms-$(events[:name]).png")
   info(env, 2, "Plotting waveforms to $filepath")
 
   if evt_indices == nothing
@@ -120,14 +120,15 @@ function plot_autoencoder(env::DLEnv, n::NetworkInfo, data::EventCollection; cou
 
   model, dir = plot_autoencoder(env, n)
 
-  data = flatten(data)
+  for lib in data
 
-  if eventcount(data) > count
-    data = data[1:count]
-  end
+      if eventcount(lib) > count
+        lib = lib[1:count]
+      end
 
-  provider = padded_array_provider(:data, waveforms(data), batch_size)
-  plot_reconstructions([n.model], ["Reconstruction"], waveforms(data), provider, dir, file_prefix=name(data)*"-", sample_count=eventcount(data), transform=transform, bin_width_ns=sampling_period(data), legendpos=(data[:waveform_type] == "current" ? :topright : :topleft))
+      provider = padded_array_provider(:data, waveforms(lib), batch_size)
+      plot_reconstructions([n.model], ["Reconstruction"], waveforms(lib), provider, dir, file_prefix=lib[:name]*"-", sample_count=eventcount(lib), transform=transform, bin_width_ns=sampling_period(lib), legendpos=(lib[:waveform_type] == "current" ? :topright : :topleft))
+    end
 
   # loss = model.arch
   # open(joinpath(dir,"graphviz.dot"), "w") do file
@@ -180,7 +181,7 @@ function plot_waveform_comparisons(env::DLEnv, libs::EventLibrary...; count=20, 
   for i in 1:diag_count
     plot(legendfont=diagram_font, legend=:topright)
     for lib in libs
-      plot!(x_axis, waveforms(lib)[:,i], linewidth=2, label=name(lib))
+      plot!(x_axis, waveforms(lib)[:,i], linewidth=2, label=lib[:name])
     end
    xaxis!("Time (ns)", diagram_font)
    yaxis!(y_label, diagram_font)
@@ -387,14 +388,14 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
     histogram!(psd_MSE, bins=bins, label="Bi FEP ($(length(psd_MSE)) events)", fillalpha=0.7, legendfont=diagram_font, linewidth=0)
     xaxis!("Classifier response", diagram_font)
     yaxis!("Event count", diagram_font)
-    savefig(joinpath(dir,"Class distribution $(name(events)).png"))
+    savefig(joinpath(dir,"Class distribution $(events[:name]).png"))
   end
 
     # Total distribution
   histogram(events[psd_key], bins=bins, label="All ($(eventcount(events)) events)", legendfont=diagram_font, linewidth=0)
   xaxis!("Classifier response", diagram_font)
   yaxis!("Event count", diagram_font)
-  savefig(joinpath(dir,"Distribution $(name(events)).png"))
+  savefig(joinpath(dir,"Distribution $(events[:name]).png"))
 
     # Energy dependence
   e_dep_hist = fit(Histogram{Float64}, (convert(Array{Float64},events[:E]),
@@ -404,7 +405,7 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
   xaxis!("Energy (keV)")
   yaxis!("Classifier output")
   title!("Classification vs energy (log10)")
-  savefig(joinpath(dir, "Energy distributions $(name(events)).png"))
+  savefig(joinpath(dir, "Energy distributions $(events[:name]).png"))
 
     # Time dependence
     events_sorted = sort(events, :timestamp)
@@ -412,16 +413,16 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
     xaxis!("Entries (1000)", font(16))
     yaxis!("Classification", font(16))
     title!("Time stability of $(events[:detector_name])", titlefont=font(16))
-  savefig(joinpath(dir, "Distribution over time $(name(events)) entries.png"))
+  savefig(joinpath(dir, "Distribution over time $(events[:name]) entries.png"))
   histogram2d(convert(Array{Float64}, (events_sorted[:timestamp]-events_sorted[:timestamp][1])/60/60/24), convert(Array{Float64},events_sorted[psd_key]))
     xaxis!("Time (days)", font(16))
     yaxis!("Classification", font(16))
     title!("Time stability of $(events[:detector_name])", titlefont=font(16))
-  savefig(joinpath(dir, "Distribution over time $(name(events)) millis.png"))
+  savefig(joinpath(dir, "Distribution over time $(events[:name]) millis.png"))
 
   if haskey(events.labels, :multiplicity)
     histogram2d(convert(Array{Float64},events.labels[:multiplicity]), convert(Array{Float64},events.labels[psd_key]))
-    savefig(joinpath(dir, "Multiplicity correlation $(name(events)).png"))
+    savefig(joinpath(dir, "Multiplicity correlation $(events[:name]).png"))
   end
 
   return bins
@@ -504,7 +505,7 @@ function plot_classifier(env::DLEnv, dirname::AbstractString, libs::EventLibrary
   current_curve = load_current_effs(libs[1][:detector_name])
 
   for (i,lib) in enumerate(libs)
-    plot_efficiency_curves(joinpath(dir, "PSD Efficiencies vs Cut $(name(lib))"), peak_effs[i])
+    plot_efficiency_curves(joinpath(dir, "PSD Efficiencies vs Cut $(lib[:name])"), peak_effs[i])
   end
   if current_curve != nothing
     plot_efficiency_curves(joinpath(dir, "PSD Efficiencies vs Cut current"), current_curve)

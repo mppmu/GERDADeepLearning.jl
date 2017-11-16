@@ -19,7 +19,10 @@ The keylist must be iterable and implement listname.
 The entries must support the string method.
 """
 function create_extendible_hdf5_files(output_dir, keylists, detector_names, sample_size, chunk_size, label_keys)
- 
+
+  sample_size = Int64(sample_size) # Prevents HDF5 error
+  chunk_size = Int64(chunk_size)
+
   h5files = [h5open(joinpath(output_dir, "$dname.h5"), "w") for dname in detector_names]
 
   label_arrays = Dict[]
@@ -29,7 +32,7 @@ function create_extendible_hdf5_files(output_dir, keylists, detector_names, samp
 
     detector_labels = Dict()
 
-    waveforms = d_create(libroot, "waveforms", Float32, ((sample_size,chunk_size), (sample_size,-1)), "chunk", (sample_size,chunk_size))
+    waveforms = d_create(libroot, "waveforms", Float32, ((sample_size,chunk_size), (sample_size,-1)), "chunk", (sample_size,chunk_size)) # requires Int64 sizes
     set_dims!(waveforms, (sample_size, 0))
     detector_labels[:waveforms] = waveforms
 
@@ -50,7 +53,7 @@ function create_extendible_hdf5_files(output_dir, keylists, detector_names, samp
     for (i,keylist) in enumerate(keylists)
       klg = g_create(properties, "Keylist$i")
       attrs(klg)["name"] = listname(keylist)
-      attrs(klg)["entries"] = [string(key) for key in keylist.entries]
+      attrs(klg)["entries"] = [string(key) for key in keylist]
     end
   end
 

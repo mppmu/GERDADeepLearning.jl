@@ -2,11 +2,11 @@
 
 using JSON, Base.Threads, MultiThreadingTools
 
-import Base: get, contains
 
 export DLEnv
 type DLEnv # immutable
   dir::AbstractString
+  name::AbstractString
   config::Dict
   _gpus::Vector{Int}
   _ext_event_libs::Dict{String,DLData}
@@ -14,17 +14,25 @@ type DLEnv # immutable
 
   DLEnv() = DLEnv("config")
   DLEnv(name::AbstractString) = DLEnv(abspath(""), name)
+
   function DLEnv(dir::AbstractString, name::AbstractString)
-    f = open(joinpath(dir,"$name.json"), "r")
-    dicttxt = readstring(f)  # file information to string
-    dict = JSON.parse(dicttxt)  # parse and transform data
-    env = new(dir, dict, Int[], Dict(), get(dict, "verbosity", 2))
+    env = new(dir, name, Dict(), Int[], Dict(), 0)
+    reload(env; replace=true)
     setup(env)
     return env
   end
 end
 
 type ConfigurationException <: Exception end
+
+function Base.reload(env::DLEnv; replace=false)
+  f = open(joinpath(env.dir,"$(env.name).json"), "r")
+  dicttxt = readstring(f)  # file information to string
+  env.config = JSON.parse(dicttxt)  # parse and transform data
+  if replace
+    env._verbosity = get(env.config, "verbosity", 2)
+  end
+end
 
 export get_properties
 function get_properties(env::DLEnv, name::AbstractString)
@@ -72,6 +80,22 @@ export get_verbosity
 function get_verbosity(env::DLEnv)
   return env._verbosity
 end
+
+export with_verbosity
+function with_verbosity(action, env::DLEnv, verb)
+    default_verbosity = env._verbosity
+    env._verbosity = verb
+    result = action()
+    env._verbosity = default_verbosity
+    return result
+end
+
+export verbose
+verbose(action, env::DLEnv) = with_verbosity(action, env, 1000)
+
+export silent
+silent(action, env::DLEnv) = with_verbosity(action, env, 0)
+
 
 function Base.getindex(env::DLEnv, key::String)
   return env.config[key]
@@ -136,13 +160,13 @@ end
 
 function _seg_to_hdf5(env::DLEnv, output_dir)
     src_dirs = env.config["path"]
-    all_files = []
+    keylists = Vector{AbstractString}[]
     for src_dir in src_dirs
         content = readdir(src_dir)
         content = src_dir .* "/" .* content[find(f->endswith(f, ".root"), content)]
-        append!(all_files, content)
+        push!(keylists, content)
     end
-    seg_to_hdf5(env.config["rawformat"], all_files, output_dir, get_verbosity(env))
+    seg_to_hdf5(env.config["rawformat"], keylists, output_dir, get_verbosity(env))
 end
 
 export getdata
@@ -211,12 +235,12 @@ function preprocess(env::DLEnv, data::DLData, config_name)
 
   for i in 1:length(data)
     lib = data.entries[i]
-    info(env,2, "Preprocessing $(name(lib))")
+    info(env,2, "Preprocessing $(lib[:name])")
     lib_t = preprocess_transform(env, lib, steps; copyf=identity)
     _builtin_filter(env, config, "failed-preprocessing", lib_t, :FailedPreprocessing, fail -> fail == 0)
     part_data = DLData(collect(values(split(env, lib_t, config["sets"]))))
     write_all_sequentially(part_data, result.dir, true)
-    info(env,3, "Wrote datasets of $(name(lib)) and released allocated memory.")
+    info(env,3, "Wrote datasets of $(lib[:name]) and released allocated memory.")
     dispose(lib)
     dispose(lib_t)
     for j in 1:length(part_data)
@@ -248,12 +272,16 @@ end
 
 function parse_datasets(env::DLEnv, strdict::Dict)
   result = Dict{AbstractString,Vector{AbstractFloat}}()
-  requiredlength = length(env["keylists"])
+  if haskey(env.config, "keylists")
+    requiredlength = length(env["keylists"])
+  else
+    requiredlength = 1
+  end
   for (key,value) in strdict
     if isa(value, Vector)
       @assert length(value) == requiredlength
       result[key] = value
-    elseif isa(value, AbstractFloat)
+    elseif isa(value, Real)
       result[key] = fill(value, requiredlength)
     else
       throw(ConfigurationException())
@@ -273,8 +301,7 @@ function setup(env::DLEnv)
 end
 e_mkdir(dir) = !isdir(dir) && mkdir(dir)
 
-export get
-function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[], uninitialize=true)
+function Base.get(compute, env::DLEnv, lib_name::String; targets::Array{String}=String[], uninitialize=true)
   if !isempty(targets) && containsall(env, targets)
     info(env, 2, "Skipping retrieval of '$lib_name'.")
     return nothing
@@ -311,7 +338,7 @@ function get(compute, env::DLEnv, lib_name::String; targets::Array{String}=Strin
   end
 end
 
-function get(env::DLEnv, lib_name::String)
+function Base.get(env::DLEnv, lib_name::String)
   _ensure_ext_loaded(env, lib_name)
   return env._ext_event_libs[lib_name]
 end
@@ -326,8 +353,7 @@ function Base.push!(env::DLEnv, lib_name::String, data::DLData; uninitialize::Bo
   end
 end
 
-export contains
-function contains(env::DLEnv, lib_name::String)
+function Base.contains(env::DLEnv, lib_name::String)
   if haskey(env._ext_event_libs, lib_name)
     return true
   end
