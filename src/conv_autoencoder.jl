@@ -22,7 +22,7 @@ function _build_conv_autoencoder(properties, input_size)
   Y = mx.Variable(:label)
 
   # Convolutional layers
-  X = mx.Reshape(X, shape=(1, input_size, 1, 0), name=:reshape_for_conv) # last argument is batch_size
+  X = mx.Reshape(X; shape=(1, input_size, 1, batch_size)) #(1, input_size, 1, 0)) # last argument is batch_size
   for i in 1:length(filter_counts)
     X = conv_layer("conv_$i", X, filter_counts[i], filter_lengths[i], act_type, pool_sizes[i], pool_type, conv_dropout)
   end
@@ -61,7 +61,7 @@ function _build_conv_decoder(X::mx.SymbolicNode, Y::mx.SymbolicNode, properties,
   end
   if length(filter_counts) > 0
     X = fc_layer("blow_up", X, filter_counts[end] * last_conv_data_length, act_type, conv_dropout)
-    X = mx.Reshape(X, shape=(1, last_conv_data_length, Int(filter_counts[end]), 0), name=:reshape_for_deconv)
+        X = mx.Reshape(X; shape=(1, last_conv_data_length, Int(filter_counts[end]), batch_size))
   else
     X = fc_layer("blow_up", X, full_size, act_type, conv_dropout)
   end
@@ -142,18 +142,22 @@ function encode(events::EventLibrary, n::NetworkInfo; log=false)
   log && info("$(n.name): encoding '$(events[:name])'...")
   model = n.model
   model = subnetwork(model.arch, model.arg_params, model.aux_params, "latent", true, n.context)
+  batch_size = n["batch_size"]
 
   result = copy(events)
 
   if eventcount(events) > 0
         all_waveforms = waveforms(events)
         all_encoded = []
-        pred_batch_size = 400000
+        pred_batch_size = batch_size*10
         # process in batches, else kernel crashes
+        batch = zeros(size(all_waveforms,1), pred_batch_size)
+
         for i in 1:pred_batch_size:size(all_waveforms,2)
             batch_range = i:min(size(all_waveforms,2),(i+pred_batch_size-1))
-            provider = mx.ArrayDataProvider(:data => all_waveforms[:,batch_range], batch_size=min(n["batch_size"], length(batch_range)))
-            push!(all_encoded, mx.predict(model, provider))
+            batch[:, 1:length(batch_range)] = all_waveforms[:,batch_range]
+            provider = mx.ArrayDataProvider(:data => batch, batch_size=batch_size)
+            push!(all_encoded, mx.predict(model, provider)[:,1:length(batch_range)])
         end
         result.waveforms = hcat(all_encoded...)
   else
@@ -180,10 +184,12 @@ function decode(compact::EventLibrary, n::NetworkInfo, pulse_size; log=false)
 
   batch_size=n["batch_size"]
   if eventcount(compact) < batch_size
-      compact.waveforms = hcat(compact.waveforms, fill(0, size(compact.waveforms, 1), batch_size-size(compact.waveforms, 2)))
+      waveforms = hcat(compact.waveforms, fill(0, size(compact.waveforms, 1), batch_size-size(compact.waveforms, 2)))
+    else
+      waveforms = compact.waveforms
   end
 
-  provider = mx.ArrayDataProvider(:data => compact.waveforms, batch_size=batch_size)
+  provider = mx.ArrayDataProvider(:data => waveforms, batch_size=batch_size)
   transformed = mx.predict(model, provider)
 
   result = copy(compact)

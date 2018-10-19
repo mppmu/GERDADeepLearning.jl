@@ -1,8 +1,7 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using HDF5
+using HDF5, Compat, LsqFit
 import Base: filter, length, getindex, haskey, copy, string, print, deepcopy
-using Compat
 
 
 export EventCollection
@@ -97,6 +96,9 @@ Base.done(lib::EventLibrary, state) = state
 Base.next(lib::EventLibrary, state) = lib, true
 Base.length(lib::EventLibrary) = 1
 
+export set_property!
+set_property!(lib::EventLibrary, key::Symbol, value) = lib.prop[key] = value
+set_property!(data::DLData, key::Symbol, value) = [set_property!(lib, key, value) for lib in data.entries]
 
 export flatten
 function flatten(data::DLData)
@@ -117,6 +119,9 @@ waveforms(data::DLData) = waveforms(flatten(data))
 export sampling_rate
 sampling_rate(lib::EventLibrary) = lib[:sampling_rate]
 sampling_rate(data::DLData) = sampling_rate(data.entries[1])
+
+export set_sampling_rate!
+set_sampling_rate!(events::EventCollection, rate::Real) = set_property!(events, :sampling_rate, rate)
 
 export sampling_period
 sampling_period(lib::EventLibrary) = 1/sampling_rate(lib)
@@ -143,7 +148,7 @@ function filter(lib::EventLibrary, predicate_key::Symbol, predicate::Function)
             return lib
         end
     end
-    
+
   if is_initialized(lib)
     indices = find(predicate, lib.labels[predicate_key])
     return lib[indices]
@@ -261,11 +266,16 @@ function getindex(lib::EventLibrary, key::Symbol)
     if key == :wf || key == :waveforms || key == :waveform
         return waveforms(lib)
     end
-  if haskey(lib.prop, key)
-    return lib.prop[key]
-  else
+    if key == :idx || key == :index || key == :indices
+        return 1:eventcount(lib)
+    end
+    if haskey(lib.prop, key)
+        return lib.prop[key]
+    end
+    if key == :name
+        return "Unnamed"
+    end
     return initialize(lib).labels[key]
-  end
 end
 function getindex(data::DLData, key::Symbol)
     if length(data) == 0
@@ -293,7 +303,7 @@ function getindex(events::EventLibrary, selection::Union{Range, Integer, Array{I
   delete!(result.prop, :eventcount)
   return result
 end
-getindex(data::DLData, selection::Union{UnitRange,Integer}) = flatten(data)[selection]
+getindex(data::DLData, selection::Union{UnitRange,Integer, Vector{Int64}, Vector{Int32}}) = flatten(data)[selection]
 
 function getindex{T<:Union{AbstractString,Number}}(events::EventCollection, predicates::Pair{Symbol,T}...)
   for predicate in predicates
@@ -366,7 +376,7 @@ function Base.string(events::EventLibrary)
   end
 end
 Base.println(lib::EventLibrary) = println(string(lib))
-Base.string(data::DLData) = "DLData ($(length(data.entries)) subsets)"
+Base.string(data::DLData) = "DLData ($(length(data.entries)) subsets, $(eventcount(data)) events)"
 Base.show(data::DLData) = println(data)
 Base.show(io::IO, data::DLData) = println(io, string(data))
 Base.print(io::IOBuffer, data::DLData) = println(io, string(data))
@@ -547,11 +557,16 @@ function Base.split(lib::EventLibrary, fractions::Dict{AbstractString,Vector{Abs
   return result
 end
 
-export label_energy_peaks
-function label_energy_peaks(events::EventLibrary, label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)
+export label_energy_peaks!
+function label_energy_peaks!(events::EventLibrary; label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)
   labels = [_get_label(events[:E][i], peaks0, peaks1, half_window) for i in 1:eventcount(events)]
   events.labels[label_key] = labels
   return events
+end
+function label_energy_peaks!(data::DLData; label_key=:SSE, peaks0=[1620.7], peaks1=[1592.5], half_window=2.0)
+    for lib in data
+        label_energy_peaks!(lib; label_key=label_key, peaks0=peaks0, peaks1=peaks1, half_window=half_window)
+    end
 end
 
 function _get_label(energy, peaks0, peaks1, half_window)
@@ -571,7 +586,7 @@ end
 export equalize_counts_by_label
 function equalize_counts_by_label(events::EventLibrary, label_key=:SSE)
   if !haskey(events, label_key)
-    label_energy_peaks(events, label_key)
+    label_energy_peaks!(events, label_key)
   end
   labels = events.labels[label_key]
   i_SSE = find(x -> x==1, labels)
@@ -588,10 +603,23 @@ end
 
 
 export put_label!
-function put_label!(events::EventLibrary, label_name::Symbol, data::Vector)
-  @assert length(data) == eventcount(events)
-  events.labels[label_name] = data
+function put_label!(events::EventLibrary, label_name::Symbol, label_data::Vector)
+    if length(label_data) != eventcount(events)
+        info("Provided label array $label_name has wrong length $(length(label_data)) ($(eventcount(events)) needed)")
+        return
+    end
+    events.labels[label_name] = label_data
 end
+
+function put_label!(data::DLData, label_name::Symbol, label_data::Vector)
+    @assert eventcount(data) == length(label_data)
+    start_index = 1
+    for lib in data
+        put_label!(lib, label_name, label_data[start_index : start_index+eventcount(lib)-1])
+        start_index += eventcount(lib)
+    end
+end
+
 
 
 function Base.keys(lib::EventLibrary)
@@ -670,18 +698,184 @@ function equal_event_count_edges(events::EventCollection, label::Symbol; events_
 end
 
 export lookup_property
-function lookup_property(source::EventLibrary, sourceindex::Integer, target::EventCollection, propkey::Symbol)
-    time = source[:timestamp][sourceindex]
-    energy = source[:E][sourceindex]
+function lookup_property(source::EventLibrary, sourceindex::Integer, target::EventCollection, propkey::Symbol; sameattrs=[:E, :E1, :E2, :E3, :E4, :filenum])
+  sourceattr = [source[attr][sourceindex] for attr in sameattrs]
     for lib in target
-        t_times = lib[:timestamp]
-        t_energies = lib[:E]
+        targetattrs = hcat([lib[attr] for attr in sameattrs]...)
         for i in 1:eventcount(lib)
-            if (t_times[i] == time) && (t_energies[i] == energy)
-                return lib[i:i][propkey]
+          if targetattrs[i,:] == sourceattr
+                if isa(lib[propkey], Array)
+                    dim = length(size(lib[propkey]))
+                    if dim == 0
+                        return lib[propkey]
+                    elseif dim == 1
+                        return lib[propkey][i]
+                    else
+                        return lib[i:i][propkey]
+                    end
+                else
+                    return lib[propkey]
+                end
             end
         end
     end
     return nothing
+end
+
+export lookup_event
+function lookup_event(source::EventLibrary, sourceindex::Integer, target::EventCollection; sameattrs=[:E, :E1, :E2, :E3, :E4, :filenum])
+  sourceattr = [source[attr][sourceindex] for attr in sameattrs]
+    for lib in target
+        targetattrs = hcat([lib[attr] for attr in sameattrs]...)
+        for i in 1:eventcount(lib)
+          if targetattrs[i,:] == sourceattr
+                return lib[i:i]
+            end
+        end
+    end
+    return nothing
+end
+
+
+export normalize_AoE!
+function normalize_AoE!(events::EventCollection, peak_energy=1592.5, peak_window=2)
+  dep_events = filter(events, :E, E->(E>=peak_energy-peak_window)&&(E<peak_energy-peak_window))
+  events[:AoE] ./= mean(dep_events[:AoE])
+end
+
+export calculate_AoE!
+function calculate_AoE!(events::EventCollection; denoise=false, correction=nothing, mse_cutoff=0.7)
+    orig_events = events
+    if denoise
+        events = deepcopy(events)
+        denoise_waveforms!(events)
+    end
+    waveforms = events[:wf]
+    energies = events[:E]
+    AoE = [maximum(waveforms[:,i]) for i in 1:eventcount(events)]
+    AoE /= median(AoE)
+
+    if correction == "exponential"
+      exp_curve(E,p) = p[1] * exp.(-p[2]*E) + p[3]
+      fit_result = curve_fit(exp_curve, Array{Float64}(energies[1:1000:end]), Array{Float64}(AoE[1:1000:end]), Float64[5, 1/1000, 0.5]).param
+      println("A/E Best fit: $fit_result")
+      for i in 1:length(energies)
+        E = energies[i]
+        AoE[i] = AoE[i] - exp_curve(E, fit_result)
+      end
+      AoE += 1-median(AoE)
+    end
+    put_label!(orig_events, :AoE, AoE)
+    AoE_class = [(AoE[i] < mse_cutoff) ? 1 : 0 for i in 1:length(AoE)]
+    put_label!(orig_events, :ANN_mse_class, AoE_class)
+end
+
+
+export calculate_SingleSeg!
+function calculate_SingleSeg!(events::EventCollection; key=:SSeg, dE=10, segcount_key=:SegCount)
+  core = events[:E]
+  E1 = events[:E1]
+  E2 = events[:E2]
+  E3 = events[:E3]
+  E4 = events[:E4]
+  SSeg = zeros(Float32, length(core))
+  SegCount = zeros(Float32, length(core))
+  for i in 1:length(core)
+        if (E1[i] > core[i]-dE) && (E1[i] < core[i]+dE)
+          SSeg[i] = 1
+        elseif (E2[i] > core[i]-dE) && (E2[i] < core[i]+dE)
+          SSeg[i] = 2
+        elseif (E3[i] > core[i]-dE) && (E3[i] < core[i]+dE)
+          SSeg[i] = 3
+        elseif (E4[i] > core[i]-dE) && (E4[i] < core[i]+dE)
+          SSeg[i] = 4
+        end
+
+        n = 0
+        if E1[i] > dE n+=1 end
+        if E2[i] > dE n+=1 end
+        if E3[i] > dE n+=1 end
+        if E4[i] > dE n+=1 end
+        SegCount[i] = n
+
+    end
+    put_label!(events, key, SSeg)
+    put_label!(events, segcount_key, SegCount)
+end
+
+
+export fit_SSE_band
+function fit_SSE_band(events::EventCollection)
+    hist1D = fit(Histogram{Float64}, events[:AoE], linspace(0,2,400), closed=:left)
+
+    model(x, p) = p[1]./sqrt(2*pi.*abs.(p[3])).*exp.(-((x.-p[2]).^2 ./(2 .*p[3].^2)))
+
+    maxidx = findmax(hist1D.weights)[2]
+    cutoff = [(i < maxidx*0.96)?0:1 for i in 1:length(hist1D.edges[1])]
+
+    weights = sqrt.(1.+vcat(0, hist1D.weights)) .* cutoff
+    fit_result = curve_fit(model, hist1D.edges[1], vcat(0, hist1D.weights), weights, [1000*2*pi, 1.1, 0.1])
+    covar = estimate_covar(fit_result)
+
+    return fit_result.param[2], fit_result.param[3], x->model(x,fit_result.param), sqrt(covar[2,2]), sqrt(covar[3,3])
+end
+
+
+export calculate_normalized_AoE!
+function calculate_normalized_AoE!(events::EventCollection; energy_slices = [1005., 1025., 1045.,
+      1115., 1135., 1155., 1175., 1195., 1205., 1225., 1245.,
+      1305., 1325., 1345., 1365., 1385., 1405., 1425., 1445., 1465., 1485.,
+      1535., 1555.,
+      1830., 1850., 1870., 1890., 1910., 1930., 1950., 1970., 1990., 2010., 2030., 2050., 2070.,
+      2140., 2160., 2180., 2200., 2220., 2240., 2260., 2280.], log=false)
+  means = Float64[]
+  mean_errs = Float64[]
+  sigmas = Float64[]
+  sigma_errs = Float64[]
+  curves = []
+
+  for slice in energy_slices
+    log && info("Fitting slice $slice keV")
+      slice_events = filter(events, :E, E->(E>slice-10)&&(E<slice+10))
+      gmean, gsigma, curve, mean_err, sigma_err = fit_SSE_band(slice_events)
+      push!(means, gmean)
+      push!(sigmas, gsigma)
+      push!(curves, curve)
+      push!(mean_errs, mean_err)
+      push!(sigma_errs, sigma_err)
+  end
+
+  mean_model(x,p) = p[1] * x + p[2]
+  line_fit = curve_fit(mean_model, energy_slices, means, 1./mean_errs.^2, [0, 1.1])
+  log && info("A/E Slope: $(line_fit.param[1])")
+
+  sigma_model(x,p) = p[1]
+  sigma_fit = curve_fit(sigma_model, energy_slices, sigmas, 1./sigma_errs.^2, [0.1])
+  mean_sigma = sigma_fit.param[1]
+  log && info("Sigma fit to $(sigma_fit.param[1])")
+
+  normalize_AoE(E, AoE) = (AoE/mean_model(E, line_fit.param) - 1) / mean_sigma
+
+  put_label!(events, :AoE_norm, normalize_AoE.(events[:E], events[:AoE]))
+  return normalize_AoE
+end
+
+
+
+
+export peak_FWHM
+function peak_FWHM(events::EventCollection, peak_center::Float64; half_window::Float64=10.0, bin_width::Float64=0.5)
+    start_energy = peak_center-half_window-bin_width
+    end_energy = peak_center+half_window+bin_width
+    nbins = Int64(round((end_energy-start_energy)/bin_width+2))
+    bin_edges = linspace(start_energy, end_energy, nbins)
+    energy_hist = fit(Histogram{Float64}, events[:E], bin_edges, closed=:left)
+    energy_axis = collect(bin_edges[2:end] + bin_edges[1:end-1]) ./ 2
+    
+    mean_count = mean(energy_hist.weights)
+    
+    f(e, p) = p[1] + p[2]*(e-peak_center) + p[3] * exp.(-0.5 .* ((e-peak_center) ./ p[4]).^2)
+    fit_result = curve_fit(f, energy_axis, energy_hist.weights, [mean_count*0.2, 0.0, mean_count*0.8, 5.0])
+    return fit_result.param[4] * 2.35482
 end
 

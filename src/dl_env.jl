@@ -68,6 +68,7 @@ end
 function Base.info(env::DLEnv, level::Integer, msg::AbstractString)
   if env._verbosity >= level
     threadsafe_info(msg)
+    flush(STDOUT)
   end
 end
 
@@ -155,18 +156,29 @@ function _mgdo_to_hdf5(env::DLEnv, output_dir)
     end
     push!(keylists, parse_keylist(resolvepath(env, keylist_path), keylist_path))
   end
-  mgdo_to_hdf5(env.config["path"], output_dir, keylists; verbosity=get_verbosity(env))
+    load_root(; verbosity=get_verbosity(env))
+    mgdo_to_hdf5(env.config["path"], output_dir, keylists; verbosity=get_verbosity(env))
 end
 
 function _seg_to_hdf5(env::DLEnv, output_dir)
     src_dirs = env.config["path"]
     keylists = Vector{AbstractString}[]
-    for src_dir in src_dirs
-        content = readdir(src_dir)
-        content = src_dir .* "/" .* content[find(f->endswith(f, ".root"), content)]
-        push!(keylists, content)
+    if env.config["rawformat"] == "SegHDF5"
+      for src_dir in src_dirs
+          content = readdir(src_dir)
+          content = joinpath.(src_dir, content[find(f->endswith(f, ".hdf5"), content)])
+          push!(keylists, content)
+      end
+      segh5_to_hdf5(env.config["rawformat"], keylists, output_dir, get_verbosity(env))
+    else
+      for src_dir in src_dirs
+          content = readdir(src_dir)
+          content = src_dir .* "/" .* content[find(f->endswith(f, ".root"), content)]
+          push!(keylists, content)
+      end
+      load_root(; verbosity=get_verbosity(env))
+      seg_to_hdf5(env.config["rawformat"], keylists, output_dir, get_verbosity(env))
     end
-    seg_to_hdf5(env.config["rawformat"], keylists, output_dir, get_verbosity(env))
 end
 
 export getdata

@@ -87,18 +87,24 @@ function baseline(events::EventLibrary)
   weights = hamming(bl_size)
   weights /= sum(weights)
 
+    weights2 = hamming(Int64(bl_size/2))
+    weights2 /= sum(weights2)
+
   bl_levels = zeros(eventcount(events))
   bl_std = zeros(eventcount(events))
+  bl_slope = zeros(eventcount(events))
 
   @everythread for i in threadpartition(1:eventcount(events))
     bl_level = dot(events.waveforms[1:bl_size, i], weights)
     bl_levels[i] = bl_level
+    bl_slope[i] = (bl_level - dot(events.waveforms[Int64(bl_size/2)+1:bl_size, i], weights2)) / (bl_size/2)
     events.waveforms[:, i] -= bl_level
     bl_std[i] = std(events.waveforms[1:bl_size, i])
   end
 
   put_label!(events, :baseline_level, bl_levels)
   put_label!(events, :baseline_std, bl_std)
+  put_label!(events, :baseline_slope, bl_slope)
   return events
 end
 
@@ -186,6 +192,24 @@ function normalize_energy(events::EventLibrary; value=1)
   return events
 end
 
+
+export denoise_waveforms!
+function denoise_waveforms!(events::EventLibrary; designmethod=Butterworth(5), lowpass_cutoff=0.2)
+  waveforms = events[:wf]
+  ff = digitalfilter(Lowpass(lowpass_cutoff),designmethod)
+  for i in 1:size(waveforms,2)
+        waveforms[:,i] = filtfilt(ff, waveforms[:,i])
+  end
+end
+
+function denoise_waveforms!(data::DLData; designmethod=Butterworth(5), lowpass_cutoff=0.2)
+  for lib in data
+    denoise_waveforms!(lib)
+  end
+end
+
+
+
 export integrate
 function integrate(events::EventLibrary)
     events = initialize(events)
@@ -201,6 +225,7 @@ function integrate(events::EventLibrary)
 end
 
 
+export integrate_array
 function integrate_array(a)
   b = copy(a)
   for i in 2:length(a)
@@ -214,7 +239,7 @@ export differentiate
 function differentiate(events::EventLibrary)
     events = initialize(events)
   @everythread for i in threadpartition(1:eventcount(events))
-      events.waveforms[:,i] = gradient(events.waveforms[:,i])
+      events.waveforms[:,i] = vcat(0, diff(events.waveforms[:,i]))
   end
   if events[:waveform_type] == "current"
     events.prop[:waveform_type] = "other"
@@ -248,3 +273,43 @@ function check_nan(lib::EventLibrary)
   end
 end
 check_nan(data::DLData) = for lib in data check_nan(lib) end
+
+
+
+export correct_tau_decay
+function correct_tau_decay(lib::EventLibrary; tau=52.098e-6/4e-9) # tau in units of sampling interval
+  alpha = 1 - exp(- 1/tau)
+
+  events = charge_pulses(lib)
+  waveforms = events[:wf]
+
+  @everythread for pulse in threadpartition(1:eventcount(events))
+      acc = 0
+      for i in 1:size(waveforms,1)
+          x = waveforms[i, pulse]
+          res = x + acc
+          acc += x * alpha
+          waveforms[i, pulse] = res
+      end
+  end
+
+  return events
+end
+
+
+export calculate_deviation
+function calculate_deviation(pulses::EventCollection, reconst::EventCollection, noise::EventCollection)
+    std_reconst = zeros(Float32, eventcount(noise))
+    std_noise = zeros(Float32, eventcount(noise))
+
+    wf_pulses = waveforms(pulses)
+    wf_reconst = waveforms(reconst)
+    wf_noise = waveforms(noise)
+
+    for i in 1:eventcount(pulses)
+        std_reconst[i] = std(wf_reconst[:,i]-wf_pulses[:,i])
+        std_noise[i] = std(wf_noise[:,i])
+    end
+
+    return std_reconst, std_noise
+end

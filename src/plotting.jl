@@ -2,8 +2,32 @@
 
 using MXNet, Plots, StatsBase, LaTeXStrings
 
-pyplot() # workaround for Julia 0.6 Plots.jl bug
+#pyplot() # workaround for Julia 0.6 Plots.jl bug
 
+
+export saveplot
+function saveplot(env::DLEnv, name; formats=["png", "pdf", "svg"])
+  for format in formats
+    savefig(joinpath(env.dir, "plots", name*"."*format))
+  end
+  return plot!()
+end
+
+export log_histogram2d
+function log_histogram2d(x, y, x_bins, y_bins; colorbar=:none)
+  mse_hist_2d = fit(Histogram{Float64}, (x, y), (x_bins, y_bins), closed=:left)
+  broadcast!(x -> x <= 0 ? NaN : log10(x), mse_hist_2d.weights, mse_hist_2d.weights)
+  plot(mse_hist_2d, colorbar=colorbar, framestyle=:box, color=:viridis)
+end
+
+export paperplot
+function paperplot(ratio=1.2, columns=1)
+    gr()
+    f = 10
+    width = 86 * columns * 4.2524
+    height = width / ratio
+    plot(size=(width, height), dpi=66.666, xtickfontsize=f, ytickfontsize=f, legendfontsize=f, xguidefontsize=f, yguidefontsize=f, titlefontsize=f, framestyle=:box)
+end
 
 export plot_waveforms
 """
@@ -56,12 +80,40 @@ function plot_waveform_thumbnail(env::DLEnv, waveform::Vector{Float32}; bin_widt
   yticks!(Float64[])
   xticks!([0,1])
   xaxis!(diagram_font)
-  yaxis!((minimum(waveform), maximum(waveform)*1.1))
+    valuerange = maximum(waveform) - minimum(waveform)
+  yaxis!((minimum(waveform)-valuerange*0.1, maximum(waveform)+valuerange*0.1))
   if titlestring != nothing
     title!(titlestring, titlefont=diagram_font)
   end
   savefig(joinpath(env.dir, "plots", filename))
   fig
+end
+
+export waveform_thumbnail
+function waveform_thumbnail(events::EventCollection, waveform, color; tcut=50:200, diagram_font=font(10), diagram_size_mm=(40,40), energy=nothing)
+    waveform = waveform[tcut]
+    tlength = tcut[end] - tcut[1]
+    time = linspace(0, (tlength-1)*sampling_period(events)*1e6, length(waveform))
+    
+    if energy != nothing
+        waveform *= energy / maximum(waveform)
+        diagram_size_mm = (diagram_size_mm[1] * 1.25, diagram_size_mm[2])
+    end
+    
+    fig = plot(time, waveform, size=diagram_size_mm .* 4.2524, dpi=66.666, line=color, legend=:none, xformatter = x -> "$((x==0)?0:x) \\mus", grid=false, framestyle=:box)
+    
+    xticks!(Float64[])
+    xaxis!(diagram_font)
+    
+    valuerange = maximum(waveform) - minimum(waveform)
+    
+    yaxis!((-valuerange*0.1, maximum(waveform)+valuerange*0.1), diagram_font)
+    if energy == nothing
+        yticks!(Float64[])
+    else
+        yaxis!("Energy (keV)")
+    end
+    fig
 end
 
 
@@ -224,9 +276,11 @@ end
 
 
 export plot_reconstruction_accuracy
-function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollection, noise::EventCollection; waveform_scale::Real=256, filename=nothing)
+function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollection, noise::EventCollection; waveform_scale::Real=256, filename=nothing, include_examples=false, reconst=nothing, E_axis=linspace(500, 2700, 250), err_axis=nothing)
+  if reconst == nothing
     info(env, 3, "Computing pulse reconstructions...")
     reconst = scale_waveforms(encode_decode(scale_waveforms(pulses, waveform_scale), net), 1.0/waveform_scale)
+  end
 
     info(env, 3, "Calculating standard deviations...")
     std_reconst = zeros(Float32, eventcount(noise))
@@ -245,8 +299,9 @@ function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollec
     info(env, 3, "Std of additional reconstruction deviation: $avg_std")
 
     # Plot added reconstruction error
-    E_axis = linspace(500, 2700, 250)
-    err_axis = linspace(-3avg_std+0.0005, 0.0015+2avg_std, 200)
+    if err_axis == nothing
+      err_axis = linspace(-3avg_std+0.0005, 0.0015+2avg_std, 200)
+    end
     info(env, 3, "Fitting 2D histogram with $(length(std_reconst)) entries...")
     mse_hist_2d = fit(Histogram{Float64}, (pulses[:E], std_reconst-std_noise), (E_axis, err_axis), closed=:left)
     broadcast!(x -> x <= 0 ? NaN : log10(x), mse_hist_2d.weights, mse_hist_2d.weights)
@@ -273,29 +328,61 @@ function plot_reconstruction_accuracy(env, net::NetworkInfo, pulses::EventCollec
         savefig(joinpath(env, "plots", net.name, "Added noise.pdf"))
         savefig(joinpath(env, "plots", net.name, "Added noise.png"))
     end
-
-    # Plot examples of SSE and MSE
-    SSE = SSE_at(pulses, 2038) # 1592.5
-    MSE = MSE_at(pulses, 2038) # 1620.7
-    info(env, 3, "Drawing SSE at $(pulses[:E][SSE]) and MSE at $(pulses[:E][MSE])")
-
-    fig_SSE = reconstruction_plot(pulses, reconst, SSE, "Single-site event", true; zoom=50:206)
-    fig_MSE = reconstruction_plot(pulses, reconst, MSE, "Multi-site event", false; zoom=50:206)
-
-    all_layout = @layout [grid(1,2,widths=[0.50, 0.5]){0.45h}
-                        a{0.7w} b]
-    plot(fig_SSE, fig_MSE, fig_err, fig_err_hist, size=(15 * 39.37, 15 * 39.37), layout=all_layout)
-    
-    if filename == nothing
-        savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).pdf"))
-        savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).png"))
-    end
-    
-    if filename != nothing
+    if filename != nothing && !include_examples
         savefig(filename)
     end
 
+    if include_examples
+      # Plot examples of SSE and MSE
+      SSE = SSE_at(pulses, 2038) # 1592.5
+      MSE = MSE_at(pulses, 2038) # 1620.7
+      info(env, 3, "Drawing SSE at $(pulses[:E][SSE]) and MSE at $(pulses[:E][MSE])")
+
+      fig_SSE = reconstruction_plot(pulses, reconst, SSE, "Single-site event", true; zoom=50:206)
+      fig_MSE = reconstruction_plot(pulses, reconst, MSE, "Multi-site event", false; zoom=50:206)
+
+      all_layout = @layout [grid(1,2,widths=[0.50, 0.5]){0.45h}
+                          a{0.7w} b]
+      plot(fig_SSE, fig_MSE, fig_err, fig_err_hist, size=(15 * 39.37, 15 * 39.37), layout=all_layout)
+
+      if filename == nothing
+          savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).pdf"))
+          savefig(joinpath(env, "plots", net.name, "reconstructions_$(pulses[:detector_name]).png"))
+      end
+
+      if filename != nothing
+          savefig(filename)
+      end
+    end
+
     return pulses, noise, reconst
+end
+
+export reconstruction_accuracy_percent_fig
+function reconstruction_accuracy_percent_fig(pulses::EventCollection, reconst::EventCollection, noise::EventCollection; E_axis=500:10:2700, err_axis=0.75:0.01:1.8)
+    std_reconst, std_noise = calculate_deviation(pulses, reconst, noise)
+
+    # Plot added reconstruction error
+    if err_axis == nothing
+      err_axis = linspace(0.75, 2, 100)
+    end
+    mse_hist_2d = fit(Histogram{Float64}, (pulses[:E], std_reconst./std_noise), (E_axis, err_axis), closed=:left)
+    broadcast!(x -> x <= 0 ? NaN : log10(x), mse_hist_2d.weights, mse_hist_2d.weights)
+    fig_err = plot(mse_hist_2d, colorbar=:none, framestyle=:box, color=:viridis)
+    xaxis!("Energy (keV)", xticks=[500, 1000, 1500, 2000, 2500])
+    yaxis!(L"$\sigma_{reconst} / \sigma_{noise}$")
+    plot!(x->1, line=(:white, 0.5, :dash), label="")
+
+    mse_hist_1d = fit(Histogram{Float64}, std_reconst./std_noise, err_axis, closed=:left)
+    he_indices = find(E->E>1000, pulses[:E])
+    mse_hist_1d_he = fit(Histogram{Float64}, std_reconst[he_indices]-std_noise[he_indices], err_axis, closed=:left)
+    fig_err_hist = plot(mse_hist_1d.weights/1000, err_axis[2:end], line=(:black, :steppre), label="All events", framestyle=:box)
+    plot!(mse_hist_1d_he.weights/1000, err_axis[2:end], line=(:lightblue, :steppre), label="> 1 MeV")
+    xaxis!("Events (1000)")
+    yaxis!(yticks=nothing)
+    plot!(x->1, line=(:black, 0.5, :dash), label="")
+
+    plot(fig_err, fig_err_hist, size=(800, 400), layout=@layout([a{0.75w} b]))
 end
 
 export reconstruction_plot
@@ -314,48 +401,48 @@ function reconstruction_plot(pulses::EventCollection, reconst::EventCollection, 
     if length(title) > 0
       title!("$title ($(Int(round(pulses[:E][index]))) keV)", titlefont=font(11))
     end
-    
+
     return fig
 end
 
 
 export energy_dependence_figure
-function energy_dependence_figure(env::DLEnv, pulses::EventCollection, detector::AbstractString)
+function energy_dependence_figure(env::DLEnv, pulses::EventCollection, detector::AbstractString; cut_value="90% DEP")
     effs = get_peak_efficiencies(env, flatten(pulses), detector);
-    cut_value = background_rejection_at(0.9, effs)[2]
+    cut_value = find_cut_value(effs, cut_value)
     info(env, 3, "Cut value: $cut_value")
     pass = filter(pulses, :psd, psd->psd>=cut_value)
     reject = filter(pulses, :psd, psd->psd<cut_value)
     info(env, 3, "Overall $(eventcount(pass)) passing, $(eventcount(reject)) rejected")
-    
+
     equal_count_energy_edges = vcat(collect(equal_event_count_edges(pulses, :E)), 3000)
-    
+
     energy_axis = equal_count_energy_edges# linspace(500, 3000, 200)
     hist_pass = fit(Histogram{Int64}, pass[:E], energy_axis, closed=:left)
     hist_reject = fit(Histogram{Int64}, reject[:E], energy_axis, closed=:left)
     hist_all = fit(Histogram{Float64}, pulses[:E], linspace(500, 3000, 250), closed=:left)
     fractions = hist_pass.weights ./ (hist_pass.weights.+hist_reject.weights)
-    
+
     energy_lim = (500, 2650)
     fig_fraction = plot(framestyle=:box)
     plot!(hist_all.edges, hist_all.weights / maximum(hist_all.weights), line=(:steppost, :grey), fill=(0,:grey), label="Events (normalized)")
     plot!(hist_pass.edges, fractions, line=(:steppost, :blue), label="Passing fraction")
     xaxis!("Energy (keV)", energy_lim, xticks=[500, 1000, 1500, 2000, 2500])
     yaxis!("Fraction of events")
-    
+
     e_dep_hist = fit(Histogram{Float64}, (convert(Array{Float64},pulses[:E]),
     convert(Array{Float64},pulses[:psd])), (linspace(500, 3000, 101), linspace(0, 1, 81)), closed=:left)
   broadcast!(x -> x <= 0 ? NaN : log10(x), e_dep_hist.weights, e_dep_hist.weights)
     fig_hist_2d = plot(e_dep_hist, framestyle=:box)
     xaxis!(energy_lim, xticks=nothing)
     yaxis!("Classifier output", colorbar=nothing)
-    
+
     hist_class = fit(Histogram{Int64}, pulses[:psd], linspace(0, 1, 50), closed=:left)
     hist_class_ROI = fit(Histogram{Int64}, filter(pulses, :E, E->(E>1700)&&(E<2090))[:psd], linspace(0, 1, 100), closed=:left)
     fig_hist_1d = plot(yticks=nothing, xticks=nothing, framestyle=:box)
     plot!(hist_class.weights/maximum(hist_class.weights), hist_class.edges, line=(:steppre, :black), label="All events")
     plot!(hist_class_ROI.weights/maximum(hist_class_ROI.weights), hist_class_ROI.edges, line=(:steppre, :lightblue), label="ROI")
-    
+
     empty_plot = plot(framestyle=:none)
     l = @layout([a{0.7w} b; c{0.4h} d])
     return plot(fig_hist_2d, fig_hist_1d, fig_fraction, empty_plot, layout=l, size=(15 * 39.37, 12 * 39.37))
@@ -408,19 +495,21 @@ function plot_classifier_histogram(dir, events::EventLibrary, label_key, psd_key
   savefig(joinpath(dir, "Energy distributions $(events[:name]).png"))
 
     # Time dependence
-    events_sorted = sort(events, :timestamp)
-  histogram2d(convert(Array{Float64}, 1:length(events_sorted[psd_key]))/1000, convert(Array{Float64},events_sorted[psd_key]))
-    xaxis!("Entries (1000)", font(16))
-    yaxis!("Classification", font(16))
-    title!("Time stability of $(events[:detector_name])", titlefont=font(16))
-  savefig(joinpath(dir, "Distribution over time $(events[:name]) entries.png"))
-  histogram2d(convert(Array{Float64}, (events_sorted[:timestamp]-events_sorted[:timestamp][1])/60/60/24), convert(Array{Float64},events_sorted[psd_key]))
-    xaxis!("Time (days)", font(16))
-    yaxis!("Classification", font(16))
-    title!("Time stability of $(events[:detector_name])", titlefont=font(16))
-  savefig(joinpath(dir, "Distribution over time $(events[:name]) millis.png"))
+    if haskey(events, :timestamp)
+        events_sorted = sort(events, :timestamp)
+      histogram2d(convert(Array{Float64}, 1:length(events_sorted[psd_key]))/1000, convert(Array{Float64},events_sorted[psd_key]))
+        xaxis!("Entries (1000)", font(16))
+        yaxis!("Classification", font(16))
+        title!("Time stability of $(events[:detector_name])", titlefont=font(16))
+      savefig(joinpath(dir, "Distribution over time $(events[:name]) entries.png"))
+      histogram2d(convert(Array{Float64}, (events_sorted[:timestamp]-events_sorted[:timestamp][1])/60/60/24), convert(Array{Float64},events_sorted[psd_key]))
+        xaxis!("Time (days)", font(16))
+        yaxis!("Classification", font(16))
+        title!("Time stability of $(events[:detector_name])", titlefont=font(16))
+      savefig(joinpath(dir, "Distribution over time $(events[:name]) millis.png"))
+    end
 
-  if haskey(events.labels, :multiplicity)
+  if haskey(events, :multiplicity)
     histogram2d(convert(Array{Float64},events.labels[:multiplicity]), convert(Array{Float64},events.labels[psd_key]))
     savefig(joinpath(dir, "Multiplicity correlation $(events[:name]).png"))
   end
@@ -454,18 +543,28 @@ function plot_energy_histogram(eventlibs::Array{EventLibrary}, nbins, filename;
 end
 
 
-export plot_efficiency_curves
-function plot_efficiency_curves(file::AbstractString, effs::EfficiencyCollection)
+export efficiency_curve_figure
+function efficiency_curve_figure(effs::EfficiencyCollection; invert_indices::Vector{Int}=Int[])
   cut_values = effs.curves[1].cut_values
 
   plot(size=(600,400), legendfont=font(16))
-  for curve in effs.curves
-    # plot!(curve.cut_values, curve.efficiencies, marker=:circle, markerstrokewidth=0.2, label=replace(string(curve.name), "_", " "))
-    plot!(curve.cut_values, curve.efficiencies, line=(3), label=replace(string(curve.name), "_", " "))
+  for i in 1:length(effs.curves)
+    curve = effs.curves[i]
+    if i in invert_indices
+      values = 1 .- curve.efficiencies
+    else
+      values = curve.efficiencies
+    end
+    plot!(curve.cut_values, values, line=(1), marker=(:circle), markerstrokewidth=0, label=replace(string(curve.name), "_", " "))
   end
 
   xaxis!("Cut value", font(20))
   yaxis!("Efficiency", (0,1), font(20))
+end
+
+export plot_efficiency_curves
+function plot_efficiency_curves(file::AbstractString, effs::EfficiencyCollection)
+  efficiency_curve_figure(effs)
   savefig("$file.png")
   savefig("$file.pdf")
   return effs
@@ -474,7 +573,7 @@ end
 
 export plot_efficiencies
 function plot_efficiencies(file::AbstractString, effs::EfficiencyCollection...)
-  plot(size=(700, 600), legendfont=font(16), legend=:bottomleft)
+  fig = plot(size=(700, 600), legendfont=font(16), legend=:bottomleft)
 
   for eff in effs
     if length(eff.curves[1].cut_values) <= 2
@@ -487,7 +586,23 @@ function plot_efficiencies(file::AbstractString, effs::EfficiencyCollection...)
   yaxis!("Background rejection", (0,1), font(20))
   savefig("$file.png")
   savefig("$file.pdf")
-  return effs
+  return fig
+end
+
+export roc_plot
+function roc_plot(effs::EfficiencyCollection...)
+  fig = plot(size=(700, 600), legendfont=font(16), legend=:bottomleft)
+
+  for eff in effs
+    if length(eff.curves[1].cut_values) <= 2
+      plot!(roc_curve(eff), label=eff.title, line=(:dash, :grey, 2))
+    else
+      plot!(roc_curve(eff), label=eff.title, linewidth=1, marker=:circle, markerstrokewidth=0)
+    end
+  end
+  xaxis!("Signal efficiency", (0.6,1), font(20))
+  yaxis!("Background rejection", (0,1), font(20))
+  return fig
 end
 
 

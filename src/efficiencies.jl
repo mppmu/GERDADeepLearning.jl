@@ -140,7 +140,9 @@ end
 export peak_efficiency_curves
 function peak_efficiency_curves(lib::EventLibrary, name::AbstractString; cut_values=100, peak_names::Vector{Symbol}=[:Tl_DEP, :Bi_FEP, :Tl_SEP, :Tl_FEP], peak_centers::Vector{Float64}=[1592.5, 1620.7, 2103.5, 2614.5], half_window::Float64=10.0, bin_width::Float64=0.5, psd_key=:psd)
   if isa(cut_values, Integer)
-    cut_values = equal_counts_cut_values(lib, cut_values)
+    cut_values = equal_counts_cut_values(lib, cut_values; psd_key=psd_key)
+  else
+        cut_values = collect(cut_values)
   end
   curves = [peak_efficiency_curve(peak_names[i], lib, peak_centers[i], cut_values; half_window=half_window, bin_width=bin_width, psd_key=psd_key) for i in 1:length(peak_centers)]
   return EfficiencyCollection(curves, name, name)
@@ -274,24 +276,67 @@ function background_rejection_std_at(signal_eff::AbstractFloat, effs::Efficiency
 end
 
 
+export equal_rejection_and_efficiency
+function equal_rejection_and_efficiency(effs::EfficiencyCollection; signal_peak=:Tl_DEP, bkg_peak=:Bi_FEP)
+  sig = effs[signal_peak]
+  bkg = effs[bkg_peak]
+
+  for i in length(sig.cut_values):-1:1
+    if sig.efficiencies[i] > 1-bkg.efficiencies[i]
+      return i, sig.cut_values[i], sig.efficiencies[i], 1 - bkg.efficiencies[i]
+    end
+  end
+  info("Signal efficiency is never better than background rejection!")
+end
+
+
+export find_cut_value
+function find_cut_value(effs::EfficiencyCollection, cut_value)
+  if isa(cut_value, Real)
+    return cut_value
+  elseif cut_value == "90% DEP"
+    cut_value_result = background_rejection_at(0.9, effs)[2]
+  elseif cut_value == "Equal"
+    cut_value_result = equal_rejection_and_efficiency(effs)[2]
+  else
+    info("Illegal cut_value argument: $cut_value")
+    return cut_value
+  end
+  info("Determined cut value $cut_value = $cut_value_result")
+  cut_value_result
+end
+
+
 export curve
 curve(eff::EfficiencyCurve) = (eff.cut_values, eff.efficiencies)
 
 export roc_curve
-function roc_curve(effs::EfficiencyCollection; signal_effs=sqrt.(linspace(0.04, 0.99, 50)), signal_peak=:Tl_DEP, bkg_peak=:Bi_FEP)
-  real_signal_effs = zeros(length(signal_effs)+1)
-  real_bkg_rej = zeros(length(signal_effs)+1)
-  real_signal_effs[1] = 0
-  real_bkg_rej[1] = 1
-  for (i,signal_eff) in enumerate(signal_effs)
+""" Complete: :left, :right, true, false
+"""
+function roc_curve(effs::EfficiencyCollection; signal_effs=linspace(0.01, 0.99, 400).^0.1, signal_peak=:Tl_DEP, bkg_peak=:Bi_FEP, complete=true)
+
+  real_signal_effs = Float64[]
+  real_bkg_rej = Float64[]
+
+  if complete == true || complete == :left
+    push!(real_signal_effs, 0)
+    push!(real_bkg_rej, 1)
+  end
+
+  for signal_eff in signal_effs
     values = background_rejection_at(signal_eff, effs; signal_peak=signal_peak, bkg_peak=bkg_peak)
     if values != nothing
-      ind, cut_value, real_signal_effs[i+1], real_bkg_rej[i+1] = values
-    else
-      # Signal efficiency is never reached
-      real_signal_effs[i+1], real_bkg_rej[i+1] = (1, 0)
+      push!(real_signal_effs, values[3])
+      push!(real_bkg_rej, values[4])
+    else break
     end
   end
+
+  if complete == true || complete == :right
+    push!(real_signal_effs, 1)
+    push!(real_bkg_rej, 0)
+  end
+
   return real_signal_effs, real_bkg_rej
 end
 

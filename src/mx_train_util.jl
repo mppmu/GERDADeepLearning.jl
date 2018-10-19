@@ -217,6 +217,7 @@ function train(n::NetworkInfo,
   verbosity >= 2 && info("$(train_provider.sample_count) data points, $(get_total_parameter_count(n.model)) learnable parameters, dropout=$(n["dropout"]), batch size $(train_provider.batch_size), using $optimizer_name with learning rate $learning_rate\u1b[K")
   verbosity >= 2 && info("Starting training on $(n.model.ctx) (from $(n.epoch+1) to $epochs)... \u1b[K")
   verbosity >= 3 && info("Untrained MSE: $(eval(n.model, eval_provider, mx.MSE())[1][2])\u1b[K")
+  flush(STDOUT)
 
   # for arg_param in n.model.arg_params
   #   print("$(arg_param[1]): ")
@@ -237,6 +238,7 @@ function train(n::NetworkInfo,
     eval_mse = eval(n.model, eval_provider, mx.MSE())[1][2]
     push!(eval_curve, eval_mse)
     verbosity >= 3 && info("Epoch $epoch / $epochs: MSE = $eval_mse.")
+    verbosity >= 3 && flush(STDOUT)
   end
 
   # mx.fit(n.model, optimizer, train_provider, n_epoch=epochs, eval_metric=metric, callbacks=[training_curve], kvstore=:device) # TODO

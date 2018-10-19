@@ -1,7 +1,23 @@
 # This file is a part of GERDADeepLearning.jl, licensed under the MIT License (MIT).
 
-using ROOTFramework, Cxx, MGDO, Base.Threads, MultiThreadingTools, HDF5
+using Base.Threads, MultiThreadingTools, HDF5
 
+global root_loaded = false
+
+export load_root
+function load_root(; verbosity=2)
+    global root_loaded
+    if root_loaded
+        verbosity >= 3 && info("ROOT already loaded.")
+        return
+    end
+    verbosity >= 2 && info("Loading ROOT...")
+    @eval begin
+        using ROOTFramework, Cxx, MGDO
+    end
+    root_loaded = true
+    verbosity >= 3 && info("ROOT loaded")
+end
 
 function mgdo_to_hdf5(base_path::AbstractString, output_dir::AbstractString, keylists::Vector{KeyList}; sample_size=1000, verbosity=2)
 
@@ -157,8 +173,9 @@ function seg_to_hdf5(formattype::AbstractString, keylists::Vector{Vector{Abstrac
 
     try
         file_count = length(all_files)
+        file_i = 0
         for(kl_i, filelist) in enumerate(keylists)
-            for (file_i, file) in enumerate(filelist)
+            for file in filelist
               if !isfile(file)
                 verbosity >= 1 && info("Skipping entry because file does not exist: $file")
               else
@@ -175,6 +192,7 @@ function seg_to_hdf5(formattype::AbstractString, keylists::Vector{Vector{Abstrac
                 results = merge_labels_per_detector(all_thread_values(results), label_keys)
                 append_to_hdf5(results, h5_arrays, verbosity)
               end
+              file_i += 1
             end
         end
     catch exc
